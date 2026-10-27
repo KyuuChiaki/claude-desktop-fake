@@ -1,0 +1,27 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "x64-release",
+      "displayName": "Claude Desktop Fake 0.6.0 - Ninja / MSVC x64 Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/x64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_SYSTEM_VERSION": "10.0.26100.0",
+        "CMAKE_CXX_COMPILER": "cl.exe",
+        "BUILD_TESTING": true
+      }
+    }
+  ],
+  "buildPresets": [ { "name": "x64-release", "configurePreset": "x64-release", "jobs": 16 } ],
+  "testPresets": [
+    {
+      "name": "x64-release",
+      "configurePreset": "x64-release",
+      "output": { "outputOnFailure": true },
+      "execution": { "jobs": 16, "noTestsAction": "error" }
+    }
+  ]
+}

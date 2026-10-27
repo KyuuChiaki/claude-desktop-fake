@@ -1,0 +1,15 @@
+* text=auto
+*.md text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.ps1 text eol=crlf
+*.cpp text eol=lf
+*.h text eol=lf
+*.inc text eol=lf
+*.asm text eol=crlf
+*.yml text eol=lf
+*.yaml text eol=lf
+third_party/** -text linguist-vendored
+include/runtime_winrt_catalog.inc linguist-generated
+include/windows_iana_cldr48.inc linguist-generated
+src/runtime_winrt_forward.asm linguist-generated

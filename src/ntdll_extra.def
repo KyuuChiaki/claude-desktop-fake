@@ -1,0 +1,9 @@
+; Exports present on the target OS but omitted from the public SDK import library.
+LIBRARY ntdll.dll
+EXPORTS
+    __chkstk
+    RtlGetProcessPreferredUILanguages
+    RtlSetProcessPreferredUILanguages
+    RtlSetThreadPreferredUILanguages
+    RtlSetThreadPreferredUILanguages2
+    RtlRestoreThreadPreferredUILanguages

@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 3,
+  "time": {
+    "enabled": true,
+    "timeZoneId": "Pacific Standard Time",
+    "utcOffsetSeconds": 0
+  },
+  "locale": {
+    "enabled": true,
+    "formatLocale": "en-US",
+    "uiLanguage": "en-US"
+  },
+  "region": {
+    "enabled": true,
+    "homeRegion": "US"
+  },
+  "runtime": {
+    "enabled": true,
+    "unknownVersionPolicy": "block",
+    "captureEnabled": false
+  }
+}
