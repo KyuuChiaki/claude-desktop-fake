@@ -42,6 +42,12 @@ IFEO 按 EXE 文件名触发，同名其他程序也会加载门控 DLL。Provid
 
 使用另一个管理员账号会读取那个账号的包注册，不能代替当前用户的 Store 注册。
 
+## EXE 枚举目录
+
+[config/claude-targets.json](../config/claude-targets.json) 默认枚举 `%CLAUDE_PACKAGE_ROOT%` 和 `%LOCALAPPDATA%\Claude-3p`，按当前用户动态解析。可以修改目录列表；Store 主程序仍为必需目标，所有候选仍需有效的 `Anthropic, PBC` 签名和文件身份检查。
+
+修改后执行 Enable 刷新身份清单，Status 的 `enumeration` 显示实际路径、哈希和是否待应用。已运行进程保留原快照。目录配置、增删与 Code 覆盖边界见 [targets.md](targets.md)。
+
 ## 配置编辑
 
 在管理员 PowerShell 中备份并编辑已部署文件：
@@ -87,3 +93,5 @@ Electron 测试映像另传 `-ImagePath` 生成绑定，详见 [compatibility.md
 | `%ProgramData%/ClaudeDesktopFake/stage3/claude` | Claude 身份清单、绑定、所有权、逐映像记录和事务材料 |
 
 遇到 `Debugger`、已有 Verifier、路径过滤或外部值变化时停止覆盖。不要手工删除状态文件或把注册表值直接清零；先保留原始材料，再按 [troubleshooting.md](troubleshooting.md) 恢复。
+
+如果注册值已经全部或部分回到恢复记录中的原值，但管理记录仍存在，先执行 `Disable` 完成状态核对与还原，再按需 `Enable`。撤销只接受精确的安装值或原值，其他改动仍视为冲突；详见 [IFEO 状态恢复](troubleshooting.md#ifeo-已恢复但启用记录仍存在)。

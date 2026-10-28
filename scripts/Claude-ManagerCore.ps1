@@ -2,13 +2,14 @@
 # only -Action; test discovery/signature providers are never script parameters.
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'Claude-ProcessDiagnostics.ps1')
+. (Join-Path $PSScriptRoot 'Claude-Enumeration.ps1')
 function New-CdfClaudeContext([string]$Root,[string]$SourceDll,[string]$DllName) {
     [pscustomobject]@{
         Root=$Root; SourceDll=$SourceDll; DllName=$DllName; TargetDll=(Join-Path $env:SystemRoot ('System32\'+$DllName))
         Manifest=(Join-Path $Root 'images.json'); State=(Join-Path $Root 'state.json'); Ownership=(Join-Path $Root 'deployment.json')
         Pending=(Join-Path $Root 'deployment-pending.json'); ImageStates=(Join-Path $Root 'state')
         PackageName='AnthropicPBC.Claude'; Family='AnthropicPBC.Claude_fnn82j28hfe8t'; Signer='Anthropic, PBC'
-        Discover=$null; Signature=$null; Fault=$null; Base=$null; Ifeo=$null
+        Discover=$null; Signature=$null; Fault=$null; Base=$null; Ifeo=$null; EnumerationConfigPath=$null
     }
 }
 function Cdf-Hash([string]$Path) { if([IO.File]::Exists($Path)){return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash}; if(Test-Path -LiteralPath $Path){throw "Expected a regular file: $Path"};return $null }
@@ -57,17 +58,23 @@ function Cdf-SetValue($C,[string]$Image,$Value) {
         $k.Flush()
     } finally {if($k){$k.Dispose()}}
 }
-function Cdf-AssertImage($C,$Item,[switch]$Partial) {
+function Cdf-ImageSnapshot($C,$Item,[switch]$Partial) {
+    $values=@()
     foreach($expected in $Item.installedValues){
         $actual=Cdf-RegistryValue $C $Item.name $expected.name
-        if(Cdf-ValueEqual $actual $expected){continue}
         $original=@($Item.originalValues|Where-Object name -eq $expected.name)[0]
-        if($Partial -and (Cdf-ValueEqual $actual $original)){continue}
-        throw "External IFEO conflict for $($Item.name)/$($expected.name); recovery records retained."
+        if(-not(Cdf-ValueEqual $actual $expected) -and -not($Partial -and (Cdf-ValueEqual $actual $original))){
+            throw "External IFEO conflict for $($Item.name)/$($expected.name); recovery records retained."
+        }
+        $values+=$actual
     }
-    $k=$C.Ifeo.OpenSubKey($Item.name,$false)
+    $k=$C.Ifeo.OpenSubKey($Item.name,$false);$exists=[bool]$k
     try { if($k -and ($k.SubKeyCount -gt 0 -or $k.GetValueNames() -contains 'Debugger' -or $k.GetValueNames() -contains 'UseFilter')){throw "External debugger/filter conflict for $($Item.name)."} }
     finally {if($k){$k.Dispose()}}
+    [pscustomobject]@{name=$Item.name;keyExisted=$exists;values=$values}
+}
+function Cdf-AssertImage($C,$Item,[switch]$Partial) {
+    Cdf-ImageSnapshot $C $Item -Partial:$Partial | Out-Null
 }
 function Cdf-NewImageState($C,[string]$Name) {
     $Name=$Name.ToLowerInvariant();$k=$C.Ifeo.OpenSubKey($Name,$false);$exists=[bool]$k
@@ -119,11 +126,12 @@ function Cdf-DiscoverPackage($C) {
     $identity=$xml.SelectSingleNode('/m:Package/m:Identity',$ns);$app=$xml.SelectSingleNode('/m:Package/m:Applications/m:Application[@Id="Claude"]',$ns)
     if(-not $identity -or -not $app -or $identity.Name -cne $C.PackageName -or $identity.ProcessorArchitecture -cne 'x64' -or $app.Executable -ine 'app\Claude.exe'){throw 'Claude manifest identity, architecture or entry point is invalid.'}
     $services=@($xml.SelectNodes('/m:Package/m:Applications/m:Application/m:Extensions/d:Extension[@Category="windows.service"]',$ns)|ForEach-Object{[string]$_.Executable})
-    [pscustomobject]@{root=[IO.Path]::GetFullPath($p.root);packageId=$p.packageId;main=(Join-Path $p.root $app.Executable);services=$services;files=@(Get-ChildItem -LiteralPath $p.root -Filter '*.exe' -File -Recurse|ForEach-Object FullName)}
+    [pscustomobject]@{root=[IO.Path]::GetFullPath($p.root);packageId=$p.packageId;main=(Join-Path $p.root $app.Executable);services=$services;files=@(if(-not $C.EnumerationConfigPath){Get-ChildItem -LiteralPath $p.root -Filter '*.exe' -File -Recurse|ForEach-Object FullName})}
 }
 function Cdf-DiscoverImages($C) {
-    $p=Cdf-DiscoverPackage $C;$verified=@();$skipped=@()
-    foreach($path in @($p.files|Sort-Object -Unique)) {
+    $p=Cdf-DiscoverPackage $C;$enumeration=Cdf-Enumeration $C $p;$candidates=Cdf-EnumeratedFiles $enumeration $p
+    $verified=@();$skipped=@($candidates.skipped)
+    foreach($path in @($candidates.files|Sort-Object -Unique)) {
         $required=$path -ieq $p.main;$reason=$null;$signer='';$signatureStatus='QueryFailed'
         try {
             $before=Get-CdfImageIdentity $path
@@ -146,7 +154,7 @@ function Cdf-DiscoverImages($C) {
     }
     if(@($verified|Where-Object path -ieq $p.main).Count -ne 1){throw 'Claude main image was not found in the verified set.'}
     if($verified.Count -gt 64){throw 'Provider supports at most 64 verified images.'}
-    [pscustomobject]@{package=$p;images=$verified;skipped=$skipped}
+    [pscustomobject]@{package=$p;images=$verified;skipped=$skipped;enumeration=$enumeration}
 }
 function Cdf-AssertDeployment($C,$State) {
     if(Test-Path -LiteralPath $C.TargetDll){
@@ -272,8 +280,10 @@ function Cdf-Enable($C) {
     if($old){foreach($i in $old.images){if($i.name -notin $states.name){$changes+=[pscustomobject]@{name=$i.name;keyExisted=$true;old=$i.installedValues;new=$i.originalValues;removeKeyIfEmpty=(-not $i.keyExisted)}}}}
     # Hash the exact serialized bytes that Cdf-Save writes.
     $manifestBytes=[Text.UTF8Encoding]::new($false).GetBytes((ConvertTo-Json -InputObject $manifest -Depth 24));if($manifestBytes.Length -gt 65536){throw 'Identity manifest exceeds 64 KiB.'};$sha=[Security.Cryptography.SHA256]::Create();try{$manifestHash=[BitConverter]::ToString($sha.ComputeHash($manifestBytes)).Replace('-','')}finally{$sha.Dispose()}
-    $state=[pscustomobject]@{schemaVersion=1;phase='installed';dllPath=$C.TargetDll;dllSha256=$hash;manifestPath=$C.Manifest;manifestSha256=$manifestHash;packageRoot=$d.package.root;packageId=$d.package.packageId;updatedAtUtc=[DateTime]::UtcNow.ToString('o');skipped=@($d.skipped);images=$states}
-    if($old -and $old.manifestSha256 -ceq $manifestHash -and -not $changes.Count){return}
+    $state=[pscustomobject]@{schemaVersion=1;phase='installed';dllPath=$C.TargetDll;dllSha256=$hash;manifestPath=$C.Manifest;manifestSha256=$manifestHash;packageRoot=$d.package.root;packageId=$d.package.packageId;updatedAtUtc=[DateTime]::UtcNow.ToString('o');skipped=@($d.skipped);images=$states;enumerationConfigPath=$d.enumeration.configurationPath;enumerationConfigSha256=$d.enumeration.sha256;enumerationDirectories=@($d.enumeration.directories)}
+    $oldEnumerationHash=if($old -and $old.PSObject.Properties['enumerationConfigSha256']){$old.enumerationConfigSha256}else{$null}
+    $oldEnumerationPath=if($old -and $old.PSObject.Properties['enumerationConfigPath']){$old.enumerationConfigPath}else{$null}
+    if($old -and $old.manifestSha256 -ceq $manifestHash -and -not $changes.Count -and $oldEnumerationHash -ceq $d.enumeration.sha256 -and $oldEnumerationPath -ceq $d.enumeration.configurationPath){return}
     foreach($path in @((Split-Path -Parent $C.Root),$C.Root,$C.ImageStates)){Cdf-SecureDirectory $path}
     $bindingDirectory=Join-Path (Split-Path -Parent $C.Manifest) 'bindings'
     if($bindings.Count){Cdf-SecureDirectory $bindingDirectory}
@@ -287,13 +297,20 @@ function Cdf-Enable($C) {
     if((Cdf-Hash $C.TargetDll) -cne $hash){$files=@((Cdf-FileChange $C.TargetDll -Source $C.SourceDll))+$files}
     foreach($i in $states){$files+=Cdf-FileChange (Join-Path $C.ImageStates ($i.name+'.json')) $i}
     if($old){foreach($i in $old.images){if($i.name -notin $states.name){$files+=Cdf-FileChange (Join-Path $C.ImageStates ($i.name+'.json'))}}}
+    if($d.enumeration.configurationPath -and (Cdf-Hash $d.enumeration.configurationPath) -cne $d.enumeration.sha256){throw 'Enumeration configuration changed during verification; Enable refused.'}
     Cdf-Transaction $C $changes $files
 }
 function Cdf-Disable($C) {
     Cdf-Recover $C;$old=Cdf-ReadState $C;if(-not $old){return}
-    foreach($i in $old.images){Cdf-AssertImage $C $i}
+    # A previous removal may already have restored some or all values. Accept
+    # only the exact installed/original values, preflight the entire batch, and
+    # retain the actual starting snapshot for transaction checks and rollback.
+    $snapshots=@(foreach($i in $old.images){Cdf-ImageSnapshot $C $i -Partial})
     Cdf-AssertDeployment $C $old
-    $changes=@($old.images|ForEach-Object{[pscustomobject]@{name=$_.name;keyExisted=$true;old=$_.installedValues;new=$_.originalValues;removeKeyIfEmpty=(-not $_.keyExisted)}})
+    $changes=@(foreach($i in $old.images){
+        $snapshot=@($snapshots|Where-Object name -eq $i.name)[0]
+        [pscustomobject]@{name=$i.name;keyExisted=$snapshot.keyExisted;old=$snapshot.values;new=$i.originalValues;removeKeyIfEmpty=(-not $i.keyExisted)}
+    })
     $files=@((Cdf-FileChange $C.State),(Cdf-FileChange $C.Manifest))
     foreach($i in $old.images){$files+=Cdf-FileChange (Join-Path $C.ImageStates ($i.name+'.json'))}
     Cdf-Transaction $C $changes $files
@@ -301,16 +318,28 @@ function Cdf-Disable($C) {
 }
 function Cdf-Status($C) {
     $state=$null;$issues=@();try{$state=Cdf-ReadState $C}catch{$issues+=$_.Exception.Message}
-    $images=@();$skipped=@();$stale=$false
+    $images=@();$skipped=@();$stale=$false;$package=$null;$enumerated=$null
     if($state){
         foreach($i in $state.images){try{Cdf-AssertImage $C $i}catch{$issues+=$_.Exception.Message}}
         if((Cdf-Hash $C.TargetDll) -cne $state.dllSha256 -or (Cdf-Hash $C.Manifest) -cne $state.manifestSha256){$issues+='Deployment hash mismatch.'}
         try{Cdf-AssertDeployment $C $state}catch{$issues+=$_.Exception.Message}
         try{$m=Get-Content -Raw -LiteralPath $C.Manifest|ConvertFrom-Json;foreach($i in $m.images){$match=$false;try{$match=(Cdf-Json (Get-CdfImageIdentity $i.path)) -ceq (Cdf-Json ($i|Select-Object name,path,nativePath,volumeSerial,fileId,size,lastWriteTimeUtcTicks))}catch{};$images+=[pscustomobject]@{name=$i.name;path=$i.path;signer=$C.Signer;signatureStatus='VerifiedAtEnable';fileIdentityCurrent=$match};if(-not $match){$stale=$true}}}catch{$issues+=$_.Exception.Message}
         $skipped=@($state.skipped)
-        try{$p=Cdf-DiscoverPackage $C;if($p.root -ine $state.packageRoot){$stale=$true}}catch{$issues+=$_.Exception.Message;$stale=$true}
+        try{$package=Cdf-DiscoverPackage $C;if($package.root -ine $state.packageRoot){$stale=$true}}catch{$issues+=$_.Exception.Message;$stale=$true}
     }else{
-        try{$discovered=Cdf-DiscoverImages $C;$skipped=@($discovered.skipped);$images=@($discovered.images|ForEach-Object{[pscustomobject]@{name=$_.name;path=$_.path;signer=$C.Signer;signatureStatus='Valid';fileIdentityCurrent=$true}})}catch{$issues+=$_.Exception.Message}
+        try{$discovered=Cdf-DiscoverImages $C;$package=$discovered.package;$enumerated=$discovered.enumeration;$skipped=@($discovered.skipped);$images=@($discovered.images|ForEach-Object{[pscustomobject]@{name=$_.name;path=$_.path;signer=$C.Signer;signatureStatus='Valid';fileIdentityCurrent=$true}})}catch{$issues+=$_.Exception.Message}
+    }
+    $enumeration=[ordered]@{configurationPath=$C.EnumerationConfigPath;sha256=$null;registeredSha256=$null;changed=$false;directories=@();error=$null}
+    if($state -and $state.PSObject.Properties['enumerationConfigSha256']){$enumeration.registeredSha256=$state.enumerationConfigSha256}
+    try{
+        if(-not $package){$package=Cdf-DiscoverPackage $C}
+        if(-not $enumerated){$enumerated=Cdf-Enumeration $C $package}
+        $enumeration.configurationPath=$enumerated.configurationPath;$enumeration.sha256=$enumerated.sha256;$enumeration.directories=@($enumerated.directories)
+        $enumeration.changed=[bool]$state -and $enumeration.sha256 -cne $enumeration.registeredSha256
+    }catch{
+        $enumeration.error=$_.Exception.Message;$enumeration.changed=[bool]$state
+        if($state -and $state.PSObject.Properties['enumerationDirectories']){$enumeration.directories=@($state.enumerationDirectories)}
+        elseif($state){$enumeration.directories=@([pscustomobject]@{path=$state.packageRoot})}
     }
     $runtime=[ordered]@{enabled=$false;configurationVersion=$null;policy=$null;captureEnabled=$false;region=$null;profiles=@();error=$null}
     try{
@@ -342,12 +371,15 @@ function Cdf-Status($C) {
         $image|Add-Member -NotePropertyName registration -NotePropertyValue ([pscustomobject]$registration)
     }
     $enabled=[bool]$state -and -not $issues.Count -and -not(Test-Path -LiteralPath $C.Pending)
-    $running=@(Get-CimInstance Win32_Process|Where-Object{$_.ExecutablePath -and $_.ExecutablePath -match '\\WindowsApps\\AnthropicPBC\.Claude_[^\\]+\\'}|ForEach-Object{
+    $imagePaths=@($images|ForEach-Object path);$imageNames=@($images|ForEach-Object name|Sort-Object -Unique)
+    $running=@(Get-CimInstance Win32_Process|Where-Object{$_.ExecutablePath -and (($_.Name -in $imageNames) -or ($_.ExecutablePath -in $imagePaths) -or (Cdf-PathInEnumeration $_.ExecutablePath $enumeration.directories))}|ForEach-Object{
         $diagnostic=Get-CdfClaudeProcessDiagnostic -ProcessId $_.ProcessId -DllPath $C.SourceDll -MapPath ([IO.Path]::ChangeExtension($C.SourceDll,'map'))
         $matched=$null -ne $diagnostic.identity -and $diagnostic.identity.reasonCode -eq 1
-        [pscustomobject]@{pid=$_.ProcessId;parentPid=$_.ParentProcessId;name=$_.Name;path=$_.ExecutablePath;service=($_.Name -ieq 'cowork-svc.exe');requiresRestart=($(if($enabled){-not $matched}else{$diagnostic.providerLoaded -ne $false}));diagnostic=$diagnostic}
+        $listed=$_.ExecutablePath -in $imagePaths
+        $inEnumeration=Cdf-PathInEnumeration $_.ExecutablePath $enumeration.directories
+        [pscustomobject]@{pid=$_.ProcessId;parentPid=$_.ParentProcessId;name=$_.Name;path=$_.ExecutablePath;service=($_.Name -ieq 'cowork-svc.exe');listed=$listed;inEnumeration=$inEnumeration;requiresEnable=($enabled -and $inEnumeration -and -not $listed -and -not $matched);requiresRestart=($(if($enabled){($listed -and -not $matched) -or (-not $listed -and $matched)}else{$matched -and $diagnostic.providerLoaded -ne $false}));diagnostic=$diagnostic}
     })
-    [pscustomobject]@{managed=[bool]$state;enabled=$enabled;images=$images;skipped=$skipped;stale=$stale;issues=$issues;running=$running;requiresRestart=(@($running|Where-Object requiresRestart).Count -gt 0);statePath=$C.State;manifestPath=$C.Manifest;pendingTransaction=(Test-Path -LiteralPath $C.Pending);providerPath=$C.TargetDll;providerSha256=(Cdf-Hash $C.TargetDll);configurationPath=(Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2\timezone.json');registryView='Registry64';runtime=[pscustomobject]$runtime}
+    [pscustomobject]@{managed=[bool]$state;enabled=$enabled;images=$images;skipped=$skipped;stale=$stale;issues=$issues;enumeration=[pscustomobject]$enumeration;refreshRequired=([bool]$state -and ($stale -or $enumeration.changed -or @($running|Where-Object requiresEnable).Count -gt 0));running=$running;requiresRestart=(@($running|Where-Object requiresRestart).Count -gt 0);statePath=$C.State;manifestPath=$C.Manifest;pendingTransaction=(Test-Path -LiteralPath $C.Pending);providerPath=$C.TargetDll;providerSha256=(Cdf-Hash $C.TargetDll);configurationPath=(Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2\timezone.json');registryView='Registry64';runtime=[pscustomobject]$runtime}
 }
 function Invoke-CdfClaudeManager($Context,[ValidateSet('Enable','Status','Disable')][string]$Action) {
     $c=$Context;$mutex=$null;$owned=$false

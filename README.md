@@ -70,6 +70,8 @@ Disable 恢复 IFEO，但不卸载已运行进程中的 DLL；进程退出后恢
 
 Claude 更新后重新执行 `Enable`。工具从当前用户的 Store 注册发现路径，重新检查有效 Authenticode 签名、`Anthropic, PBC` 签名者和具体文件身份，再进行离线兼容解析。
 
+EXE 枚举目录由 [config/claude-targets.json](config/claude-targets.json) 配置，默认包含动态发现的 Store 包和当前用户的 `%LOCALAPPDATA%\Claude-3p`，用于纳入 Desktop 下载的 Claude Code。目录变量无需写入用户名。每个文件仍须独立验签和登记，修改目录或下载新版本后重新 Enable；详见 [枚举目录](docs/targets.md)。
+
 完整映像命中、同运行时重打包或已验证 ABI 自动解析均会生成绑定。定位不唯一、ABI 改变或证据不足时拒绝适配。默认 block 会在启用前拒绝不支持的目标；启动复核失败按配置阻止或整套透传。身份不匹配的同名程序保持透传。
 
 Provider 自身升级先 `Disable`，再替换构建并 `Enable`。不强行覆盖调试器、其他 Verifier、过滤配置或外部修改。
@@ -81,6 +83,7 @@ Provider 自身升级先 `Disable`，再替换构建并 `Enable`。不强行覆�
 | [构建](docs/build.md) | 环境、自动发现、工具覆盖、产物和生成器 |
 | [使用](docs/usage.md) | 首次部署、启停、更新、通用 Probe、诊断和恢复 |
 | [配置](docs/configuration.md) | 时间、区域、语言、地理区域与失败策略 |
+| [枚举目录](docs/targets.md) | JSON 目录列表、用户变量、Code 缓存、身份刷新与状态 |
 | [兼容性](docs/compatibility.md) | 分级识别、离线分析、绑定和支持边界 |
 | [测试](docs/testing.md) | 8 项无注册检查、18 项完整套件和夹具准备 |
 | [故障排查](docs/troubleshooting.md) | 错误分类、冲突与中断恢复 |

@@ -52,7 +52,7 @@ function Get-CdfClaudeProcessDiagnostic([int]$ProcessId,[string]$DllPath,[string
         $timeCounts=Read-Symbol counters time_provider (23*8)
         $localeCount=@(Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'include\locale_hooks.inc')|Where-Object {$_ -match '^CDF_LOCALE_HOOK\('}).Count
         $localeCounts=Read-Symbol counters locale_provider ($localeCount*8)
-        $sumTime=[ulong]0;$sumLocale=[ulong]0
+        $sumTime=[UInt64]0;$sumLocale=[UInt64]0
         for($i=0;$i -lt 23;$i++){$sumTime+=[BitConverter]::ToUInt64($timeCounts,$i*8)}
         for($i=0;$i -lt $localeCount;$i++){$sumLocale+=[BitConverter]::ToUInt64($localeCounts,$i*8)}
         $result.time=[pscustomobject]@{initializationState=[BitConverter]::ToUInt32((Read-Symbol state time_provider 4),0);active=(Read-Symbol active time_provider 1)[0] -ne 0;errorStage=[BitConverter]::ToUInt32((Read-Symbol error_stage time_provider 4),0);errorCode=[BitConverter]::ToUInt32((Read-Symbol error_code time_provider 4),0);observedCalls=$sumTime}

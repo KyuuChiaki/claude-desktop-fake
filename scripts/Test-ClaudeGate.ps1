@@ -31,6 +31,16 @@ $cases=[Collections.Generic.List[object]]::new();$failure=$null;$cleanup=@();$sa
 $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
 $ifeo=$base.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options',$true)
 function Test-Registry([string]$name){$k=$ifeo.OpenSubKey($name,$false);try{if(-not $k){return 'null'};Cdf-Json @($k.GetValueNames()|Sort-Object|ForEach-Object{[pscustomobject]@{name=$_;kind=$k.GetValueKind($_).ToString();data=$k.GetValue($_,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)}})}finally{if($k){$k.Dispose()}}}
+function Test-SetRegistryValues([string]$name,$values){
+    $key=$ifeo.OpenSubKey($name,$true)
+    try{foreach($value in $values){
+        if($value.exists){
+            if(-not $key){$key=$ifeo.CreateSubKey($name)}
+            $kind=[Microsoft.Win32.RegistryValueKind][Enum]::Parse([Microsoft.Win32.RegistryValueKind],$value.kind)
+            $data=$value.data;if($kind -eq 'DWord'){$data=[int]$data};$key.SetValue($value.name,$data,$kind)
+        }elseif($key){$key.DeleteValue($value.name,$false)}
+    };if($key){$key.Flush()}}finally{if($key){$key.Dispose()}}
+}
 function Test-Reject([scriptblock]$body,[string]$pattern,[string]$label){$caught=$false;try{& $body|Out-Null}catch{if($_.Exception.Message -notlike $pattern){throw};$caught=$true};Test-Check $caught $label}
 function Test-Check([bool]$condition,[string]$label){if(-not $condition){throw $label};$cases.Add([pscustomobject]@{label=$label;passed=$true})}
 function Test-Probe([string]$path,[string]$expect,[string]$label,[string]$reason=''){
@@ -125,6 +135,109 @@ try{
     Test-Check ((Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $baselineRegistry -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq 'null') 'disable restores exact original registry values and key existence'
     Invoke-CdfClaudeManager $context Disable|Out-Null
     Test-Check (-not(Test-Path -LiteralPath $context.State) -and -not(Test-Path -LiteralPath $context.Pending)) 'repeat disable is idempotent'
+
+    # Reconcile values already returned to the recorded baseline without
+    # accepting a third value, debugger, or path filter as a safe restoration.
+    $package.files=@($probe,$second,$fake1,$fake2,$fake3)
+    Invoke-CdfClaudeManager $context Enable|Out-Null
+    $recovery=Get-Content -LiteralPath $context.State -Raw|ConvertFrom-Json
+    $recoveryHash=Cdf-Hash $context.State
+    foreach($image in $recovery.images){Test-SetRegistryValues $image.name $image.originalValues}
+    $ifeo.DeleteSubKey('CdfClaudeGateOther64.exe',$false)
+    Test-Reject {Invoke-CdfClaudeManager $context Enable} '*External IFEO conflict*' 'enable refuses externally removed registration until disable reconciles it'
+    foreach($guard in @('Debugger','UseFilter')){
+        $key=$ifeo.OpenSubKey('CdfClaudeGateProbe64.exe',$true)
+        if($guard -eq 'Debugger'){$key.SetValue($guard,'fixture',[Microsoft.Win32.RegistryValueKind]::String)}else{$key.SetValue($guard,0,[Microsoft.Win32.RegistryValueKind]::DWord)}
+        $key.Dispose()
+        try{Test-Reject {Invoke-CdfClaudeManager $context Disable} '*External debugger/filter conflict*' ('baseline reconciliation still refuses '+$guard)}finally{$key=$ifeo.OpenSubKey('CdfClaudeGateProbe64.exe',$true);$key.DeleteValue($guard);$key.Dispose()}
+    }
+    $key=$ifeo.OpenSubKey('CdfClaudeGateProbe64.exe',$true);$child=$key.CreateSubKey('CdfFixtureFilter');$child.Dispose();$key.Dispose()
+    try{Test-Reject {Invoke-CdfClaudeManager $context Disable} '*External debugger/filter conflict*' 'baseline reconciliation still refuses IFEO filter subkeys'}finally{$key=$ifeo.OpenSubKey('CdfClaudeGateProbe64.exe',$true);$key.DeleteSubKey('CdfFixtureFilter',$false);$key.Dispose()}
+    Test-Check ((Cdf-Hash $context.State) -ceq $recoveryHash -and (Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $baselineRegistry -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq 'null') 'rejected reconciliation preserves all records and original registry types'
+    Invoke-CdfClaudeManager $context Disable|Out-Null
+    Test-Check (-not(Test-Path -LiteralPath $context.State) -and -not(Test-Path -LiteralPath $context.Pending) -and (Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $baselineRegistry -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq 'null') 'disable reconciles fully restored values and an already missing key'
+
+    # A failed or interrupted disable must restore its actual mixed starting
+    # values, including a missing VerifierFlags, rather than reinstalling them.
+    Invoke-CdfClaudeManager $context Enable|Out-Null
+    $recoveryHash=Cdf-Hash $context.State
+    $key=$ifeo.OpenSubKey('CdfClaudeGateProbe64.exe',$true);$key.SetValue('GlobalFlag','0x08000000',[Microsoft.Win32.RegistryValueKind]::String);$key.Dispose()
+    $key=$ifeo.OpenSubKey('CdfClaudeGateOther64.exe',$true);$key.DeleteValue('VerifierFlags');$key.Dispose()
+    $mixedFirst=Test-Registry 'CdfClaudeGateProbe64.exe';$mixedSecond=Test-Registry 'CdfClaudeGateOther64.exe'
+    $key=$ifeo.OpenSubKey('CdfClaudeGateOther64.exe',$true);$key.SetValue('VerifierFlags','0',[Microsoft.Win32.RegistryValueKind]::String);$key.Dispose()
+    try{Test-Reject {Invoke-CdfClaudeManager $context Disable} '*External IFEO conflict*' 'partial restoration refuses an external value with a different registry type'}finally{$key=$ifeo.OpenSubKey('CdfClaudeGateOther64.exe',$true);$key.DeleteValue('VerifierFlags');$key.Dispose()}
+    Test-Check ((Cdf-Hash $context.State) -ceq $recoveryHash -and (Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $mixedFirst -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq $mixedSecond) 'partial conflict causes no writes to the rest of the batch'
+    $context.Fault={param($writes)if($writes -eq 2){throw 'Simulated partial disable failure'}}
+    try{Test-Reject {Invoke-CdfClaudeManager $context Disable} '*Transaction rolled back: Simulated partial disable failure*' 'partial disable failure is rolled back'}finally{$context.Fault=$null}
+    Test-Check ((Cdf-Hash $context.State) -ceq $recoveryHash -and -not(Test-Path -LiteralPath $context.Pending) -and (Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $mixedFirst -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq $mixedSecond) 'rollback restores the exact mixed snapshot without recreating missing values'
+    $worker=Join-Path (Split-Path -Parent $PSScriptRoot) 'tests\claude_transaction_worker.ps1'
+    & (Get-Process -Id $PID).Path -NoProfile -File $worker -Project (Split-Path -Parent $PSScriptRoot) -Root $root -Manifest $context.Manifest -SourceDll $context.SourceDll -Probe $probe -Second $second -Action Disable
+    Test-Check ($LASTEXITCODE -eq 87 -and (Test-Path -LiteralPath $context.Pending)) 'interrupted partial disable preserves its write-ahead journal'
+    try{$context.Ifeo=$ifeo;Cdf-Recover $context}finally{$context.Ifeo=$null}
+    Test-Check ((Cdf-Hash $context.State) -ceq $recoveryHash -and -not(Test-Path -LiteralPath $context.Pending) -and (Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $mixedFirst -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq $mixedSecond) 'interrupted recovery restores exact starting values and records'
+    Invoke-CdfClaudeManager $context Disable|Out-Null
+    Test-Check (-not(Test-Path -LiteralPath $context.State) -and -not(Test-Path -LiteralPath $context.Pending) -and (Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $baselineRegistry -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq 'null') 'partial restoration completes disable and preserves unrelated registry data'
+
+    # Configurable roots must keep the Store main required and apply the same
+    # signature, architecture, file identity, and shared-name IFEO rules.
+    $enumStore=Join-Path $run 'enum-store';$enumCache=Join-Path $run 'another-user 中文\Claude-3p'
+    $enumOutside=Join-Path $run 'enum-outside';$enumConfig=Join-Path $run 'claude-targets.json'
+    foreach($directory in @($enumStore,$enumCache,$enumOutside,(Join-Path $enumCache 'claude-code\1.0'),(Join-Path $enumCache 'claude-code\2.0'))){New-Item -ItemType Directory -Path $directory -Force|Out-Null}
+    $enumMain=Join-Path $enumStore 'CdfClaudeGateProbe64.exe';Copy-Item -LiteralPath $probe -Destination $enumMain
+    $enumCode=Join-Path $enumCache 'claude-code\1.0\CdfClaudeGateProbe64.exe';Copy-Item -LiteralPath $probe -Destination $enumCode
+    $enumNext=Join-Path $enumCache 'claude-code\2.0\CdfClaudeGateProbe64.exe';Copy-Item -LiteralPath $probe -Destination $enumNext
+    $enumHelper=Join-Path $enumCache 'CdfClaudeGateOther64.exe';Copy-Item -LiteralPath $probe -Destination $enumHelper
+    $outsideHelper=Join-Path $enumOutside 'CdfClaudeGateOther64.exe';Copy-Item -LiteralPath $probe -Destination $outsideHelper
+    foreach($name in @('CdfClaudeUnsigned64.exe','CdfClaudeWrongSigner64.exe','CdfClaudeSigError64.exe')){Copy-Item -LiteralPath $probe -Destination (Join-Path $enumCache $name)}
+    $enumPackage=[pscustomobject]@{root=$enumStore;packageId='fixture_1.0.0.0_x64__fnn82j28hfe8t';main=$enumMain;services=@();files=@($enumMain)}
+    $context.Discover={$enumPackage}.GetNewClosure();$context.EnumerationConfigPath=$enumConfig
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%','%LOCALAPPDATA%\Claude-3p','%localappdata%\Claude-3p\')})
+    $resolved=Cdf-Enumeration $context $enumPackage
+    Test-Check ($resolved.directories.Count -eq 2 -and $resolved.directories[1].path -ieq (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Claude-3p')) 'known-folder variables resolve the current user and duplicate roots are removed'
+    Test-Check ((Cdf-PathInEnumeration (Join-Path $enumCache 'x.exe') @([pscustomobject]@{path=$enumCache})) -and -not(Cdf-PathInEnumeration ($enumCache+'-outside\x.exe') @([pscustomobject]@{path=$enumCache}))) 'directory matching respects path component boundaries'
+    foreach($invalid in @(
+        '{"schemaVersion":1,"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%"]}',
+        '{"schemaVersion":2,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%"]}',
+        '{"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%"],"unknown":true}',
+        '{"schemaVersion":1,"imageDirectories":"%CLAUDE_PACKAGE_ROOT%"}',
+        '{"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%","%UNKNOWN_FOLDER%"]}',
+        '{"schemaVersion":1,"imageDirectories":["relative-folder"]}',
+        '{"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%","C:\\"]}',
+        '{"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%","C:\\wildcard*"]}',
+        '{"schemaVersion":1,"imageDirectories":[]}',
+        '{"schemaVersion":1,"imageDirectories":["%LOCALAPPDATA%\\Claude-3p"]}'
+    )){
+        [IO.File]::WriteAllText($enumConfig,$invalid,[Text.UTF8Encoding]::new($false))
+        Test-Reject {Cdf-Enumeration $context $enumPackage} '*' 'invalid enumeration configuration is rejected before deployment'
+    }
+    $enumSettings=[ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%',$enumCache,(Join-Path $run 'optional-missing'))}
+    Cdf-Save $enumConfig $enumSettings
+    $link=Join-Path $enumCache 'linked-outside';New-Item -ItemType Junction -Path $link -Target $enumOutside|Out-Null
+    try{
+        $found=Cdf-DiscoverImages $context
+        Test-Check ($found.images.Count -eq 4 -and @($found.skipped|Where-Object reason -eq 'signature-mismatch').Count -eq 2 -and @($found.skipped|Where-Object reason -eq 'reparse-entry').Count -eq 1) 'configured roots recurse and enforce signatures while skipping junctions'
+        Test-Check (@($found.enumeration.directories|Where-Object {-not $_.exists}).Count -eq 1) 'missing optional directories are reported without breaking discovery'
+    }finally{[IO.Directory]::Delete($link,$false)}
+    $status=Invoke-CdfClaudeManager $context Enable
+    Test-Check ($status.enabled -and $status.images.Count -eq 4 -and $status.enumeration.directories.Count -eq 3 -and -not $status.enumeration.changed) 'configured package and cache images share a transactional identity manifest'
+    $configState=Get-Content -LiteralPath $context.State -Raw|ConvertFrom-Json
+    Test-Check ($configState.images.Count -eq 2 -and $configState.enumerationConfigSha256 -ceq (Cdf-Hash $enumConfig)) 'same executable names share IFEO records while each path has its own identity'
+    Test-Probe $enumMain match 'configured Store root TLS and main ready' matched
+    Test-Probe $enumCode match 'configured cache root TLS and main ready' matched
+    Test-Probe $enumNext match 'second cached version TLS and main ready' matched
+    Test-Probe $enumHelper match 'configured cache helper TLS and main ready' matched
+    Test-Probe $outsideHelper deny 'same executable outside all configured roots stays transparent' image-not-listed
+    $unchanged=Cdf-Hash $context.State;Invoke-CdfClaudeManager $context Enable|Out-Null
+    Test-Check ((Cdf-Hash $context.State) -ceq $unchanged) 'configured repeat Enable preserves recovery records'
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%')})
+    $status=Invoke-CdfClaudeManager $context Status
+    Test-Check ($status.enabled -and $status.enumeration.changed -and $status.refreshRequired) 'Status distinguishes edited enumeration policy from active registration'
+    Invoke-CdfClaudeManager $context Enable|Out-Null
+    Test-Probe $enumCode deny 'removing cache root revokes its identity for new processes' image-not-listed
+    Test-Probe $enumHelper absent 'removing unique helper name restores its IFEO registration'
+    Invoke-CdfClaudeManager $context Disable|Out-Null
+    Test-Check ((Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $baselineRegistry -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq 'null') 'configured disable restores exact pre-test registry values'
+    $context.EnumerationConfigPath=$null;$context.Discover={$package}.GetNewClosure()
 }catch{$failure=$_.Exception.ToString()+"`n"+$_.ScriptStackTrace}finally{
     if($savedManifest -and (Test-Path -LiteralPath $context.State)){try{[IO.File]::WriteAllBytes($context.Manifest,$savedManifest)}catch{$cleanup+=$_.Exception.Message}}
     try{Invoke-CdfClaudeManager $context Disable|Out-Null}catch{$cleanup+=$_.Exception.Message}

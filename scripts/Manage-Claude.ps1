@@ -7,4 +7,5 @@ Set-StrictMode -Version Latest
 $project=Split-Path -Parent $PSScriptRoot
 $context=New-CdfClaudeContext -Root (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage3\claude') `
     -SourceDll (Join-Path $project 'out\build\x64-release\bin\CdfClaudeTimeZone64.dll') -DllName 'CdfClaudeTimeZone64.dll'
+$context.EnumerationConfigPath=Join-Path $project 'config\claude-targets.json'
 Invoke-CdfClaudeManager -Context $context -Action $Action | ConvertTo-Json -Depth 24

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "imageDirectories": [
+    "%CLAUDE_PACKAGE_ROOT%",
+    "%LOCALAPPDATA%\\Claude-3p"
+  ]
+}

@@ -9,6 +9,8 @@
 | 配置缺失 | 构建后运行 `Initialize-Config.ps1` |
 | 初始化拒绝覆盖配置 | 已有文件会保留；备份并编辑部署 JSON，再运行校验器 |
 | 找不到 Store 包 | 在实际安装 Claude 的同一用户会话运行；检查包身份和 x64 入口 |
+| Code DLL 已加载但 `image-not-listed` | 检查 `config/claude-targets.json` 是否包含 Code 所在目录，重新 Enable 验签登记后，由用户重启对应进程；目录存在不等于文件已登记 |
+| `enumeration.changed`／`refreshRequired` | 查看展开目录和配置错误；配置有效后重新 Enable，不手工改身份清单 |
 | 签名不符合 | 查看 Valid 状态和签名者；主程序不符合会整批拒绝，不应关闭身份检查 |
 | Access denied／注册拒绝 | 使用管理员 x64 PowerShell，检查已有调试／Verifier／过滤配置和安全产品事件记录；工具不自动停用系统防护 |
 | `catalogue-build-mismatch` | JSON 与解析器不是同一构建，重新构建并保持 DLL、解析器和档案一致 |
@@ -26,6 +28,22 @@
 `deployment-pending.json` 与 `recovery.<id>` 是写前事务材料。中断后用管理该映像的同一个工具执行 `Disable` 或 `Uninstall`。工具预检注册值和文件哈希，恢复原存在状态、类型和值；外部冲突会停止并保留材料。
 
 存在冲突时不要使用另一套版本的脚本覆盖记录，不要直接删除 System32 DLL、状态目录或绑定。先保存材料，比较记录中的 old/new 哈希与实际文件，确认哪些改动属于本工具。应用仍运行并持有 DLL 时，先按自己的维护安排退出进程。
+
+## IFEO 已恢复，但启用记录仍存在
+
+如果 `Enable` 报 `External IFEO conflict ... recovery records retained`，而 `Status` 显示 `managed=true`、`enabled=false`，先保留状态目录并检查各映像的注册值。使用同一套管理脚本执行：
+
+```powershell
+.\scripts\Manage-Claude.ps1 -Action Disable
+.\scripts\Manage-Claude.ps1 -Action Status
+.\scripts\Manage-Claude.ps1 -Action Enable
+```
+
+`Disable` 会对整批映像预检：每个值必须与本工具安装的值或恢复记录中的原值完全一致，包括存在状态、注册表类型和数据。全部或部分值已经恢复时，工具完成剩余还原并清理管理记录；事务失败或中断时，回滚到这次撤销开始前的实际状态，不会重新创建原本已缺失的值。
+
+出现第三种值、类型变化、Debugger、UseFilter、路径过滤子键或部署文件哈希冲突时，仍停止整批操作并保留恢复材料。不要用删除状态文件的方式绕过检查。`Enable` 保持严格检查，不会直接覆盖被移除或改动的注册配置。
+
+重新启用后，由用户退出并重启 Claude；服务的重启也由用户安排。工具不会卸载既有进程中的 Provider。
 
 ## 只读排查命令
 

@@ -1,4 +1,4 @@
-param([string]$Project,[string]$Root,[string]$Manifest,[string]$SourceDll,[string]$Probe,[string]$Second)
+param([string]$Project,[string]$Root,[string]$Manifest,[string]$SourceDll,[string]$Probe,[string]$Second,[ValidateSet('Enable','Disable')][string]$Action='Enable')
 $ErrorActionPreference='Stop'
 . (Join-Path $Project 'scripts\Claude-FileIdentity.ps1')
 . (Join-Path $Project 'scripts\Claude-ManagerCore.ps1')
@@ -9,5 +9,5 @@ $context.Discover={$fixture}.GetNewClosure()
 $context.Signature={param($path)[pscustomobject]@{status='Valid';signer='Anthropic, PBC'}}
 # Deliberately terminate the isolated manager, leaving the write-ahead journal.
 $context.Fault={param($writes)if($writes -eq 4){[Environment]::Exit(87)}}
-Invoke-CdfClaudeManager $context Enable|Out-Null
+Invoke-CdfClaudeManager $context $Action|Out-Null
 exit 1
