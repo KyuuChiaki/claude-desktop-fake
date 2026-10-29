@@ -58,9 +58,12 @@ $backup = "$config.backup-$(Get-Date -Format yyyyMMddHHmmss)"
 Copy-Item -LiteralPath $config -Destination $backup
 notepad $config
 .\out\build\x64-release\bin\CdfTimeRules64.exe --validate-config $config
+.\scripts\Show-TimeConfig.ps1 -ConfigPath $config
 ```
 
 校验成功后由用户重启目标进程，读取新的启动快照。配置格式见 [configuration.md](configuration.md)。若有通用测试映像正在使用共享部署，先完成其撤销；通用安装器会把未登记的配置改动视为外部冲突。
+
+只切换时区时保持 `utcOffsetSeconds=0`；该值是额外的 UTC 时钟偏移，不要填写洛杉矶的 −25200／−28800。预览同时显示时钟偏移和自动计算的时区偏移，但不验证现有进程是否已生效。
 
 ## 只读诊断
 

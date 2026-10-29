@@ -158,6 +158,8 @@ if(BUILD_TESTING)
     add_test(NAME runtime_integration COMMAND "${CDF_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${CMAKE_SOURCE_DIR}/scripts/Test-Runtime.ps1" -BuildDirectory "${CMAKE_BINARY_DIR}" -Iterations 10 -Capture)
     add_test(NAME time_rules COMMAND CdfTimeRules64)
+    add_test(NAME time_config_preview COMMAND "${CDF_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+        -File "${CMAKE_SOURCE_DIR}/scripts/Test-TimeConfigPreview.ps1" -BuildDirectory "${CMAKE_BINARY_DIR}")
     add_test(NAME locale_rules COMMAND CdfLocaleRules64)
     add_test(NAME locale_build_inspection COMMAND "${CDF_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
         -File "${CMAKE_SOURCE_DIR}/scripts/Inspect-LocaleBuild.ps1" -BuildDirectory "${CMAKE_BINARY_DIR}")

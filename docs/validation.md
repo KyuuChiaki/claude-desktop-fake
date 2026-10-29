@@ -33,6 +33,8 @@
 
 ## 发布前检查
 
+2026-10-29 补充时间配置语义与只读预览：确认 `utcOffsetSeconds` 是额外 UTC 时钟偏移，默认 0 与洛杉矶时区不冲突。新增 72 项预览检查在 PowerShell 7 与 Windows PowerShell 5.1 均通过，覆盖三个配置版本、DST 两个切换边界、偏移跨越切换点、半小时时区、跨日／闰日、禁用、无效参数和只读输出契约。Unit 套件扩展为 9 项并通过；完整 CTest 定义现在为 19 项，本次未重跑注册或运行时行为矩阵。生产 Hook 源码、已部署 JSON、DLL、身份与管理记录保持原内容。
+
 2026-10-28 的可配置枚举维护新增 `config/claude-targets.json`，门控集成回归扩展到 101 个用例并全部通过。Windows PowerShell 5.1 已现场完成原配置到 JSON 目录策略的迁移和重复启用；9 条文件身份共享 8 个 IFEO 文件名，配置、Provider 和服务 PID 保持原值。
 
 同日读取了 `%LOCALAPPDATA%\Claude-3p\claude-code\2.1.308\<hash>\claude.exe` 的自然运行实例：身份从清单外变为 matched，时间 Hook 23/23、桥接 5/5，区域语言 Hook 53/53、别名 90/90 就绪；后续采样观测到时间 Hook 136909 次、区域语言 Hook 10 次调用。该现场仍使用 schema 2；接口组有调用记录不等于已经观测到每个接口调用，也不代表 Code 内部 JS／Intl／网络行为矩阵已通过。

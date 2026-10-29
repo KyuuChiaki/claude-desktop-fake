@@ -64,6 +64,16 @@ Disable 恢复 IFEO，但不卸载已运行进程中的 DLL；进程退出后恢
 虚拟本地时间 = 按配置时区及对应日期的 DST 规则换算虚拟 UTC
 ```
 
+`utcOffsetSeconds` 是**额外的 UTC 时钟偏移**，不是时区偏移。只想显示洛杉矶当前时间时，保持 `Pacific Standard Time` 和 `0`；程序自动按日期采用 UTC−7／UTC−8。不要把 `-25200` 或 `-28800` 再填进该字段，也不要删除这个必填字段。
+
+构建后可只读预览，不需要管理员，也不安装 Provider：
+
+```powershell
+.\scripts\Show-TimeConfig.ps1 -ConfigPath '.\config\timezone.json'
+```
+
+输出将 `utcClockShiftSeconds` 与 `timeZoneOffsetSeconds` 分开，并显示虚拟 UTC、本地时间和夏令时状态。`captureEnabled` 只控制可选 JS 诊断采样，关闭采样仍能启用 Hook；具体见 [配置说明](docs/configuration.md)。
+
 格式区域与 UI 语言分离；国家地区独立。显式 Locale、时区、线程／进程语言、会话及请求头优先。QPC、TickCount、hrtime、运行时长和 CPU 耗时保持真实。schema 1／2 保留旧行为，不自动开启新功能。字段、编辑与校验说明见 [配置](docs/configuration.md)。
 
 ## 更新后的兼容处理
@@ -85,7 +95,7 @@ Provider 自身升级先 `Disable`，再替换构建并 `Enable`。不强行覆�
 | [配置](docs/configuration.md) | 时间、区域、语言、地理区域与失败策略 |
 | [枚举目录](docs/targets.md) | JSON 目录列表、用户变量、Code 缓存、身份刷新与状态 |
 | [兼容性](docs/compatibility.md) | 分级识别、离线分析、绑定和支持边界 |
-| [测试](docs/testing.md) | 8 项无注册检查、18 项完整套件和夹具准备 |
+| [测试](docs/testing.md) | 9 项无注册检查、19 项完整套件和夹具准备 |
 | [故障排查](docs/troubleshooting.md) | 错误分类、冲突与中断恢复 |
 | [架构](docs/architecture.md) | 源码导航、加载链与诊断 ABI |
 | [验收摘要](docs/validation.md) | 参考环境事实与实际进程证据边界 |

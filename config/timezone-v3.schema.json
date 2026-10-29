@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Claude Desktop Fake configuration, schema 3",
+  "description": "Windows process-local virtualization. UTC clock shift, time-zone bias, formatting, UI language and home region are separate settings. Windows validates installed time zones and NLS data at initialization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "time", "locale", "region", "runtime"],
+  "properties": {
+    "schemaVersion": {"const": 3},
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "timeZoneId", "utcOffsetSeconds"],
+      "properties": {
+        "enabled": {"type": "boolean", "description": "Enable virtual UTC and the configured time zone."},
+        "timeZoneId": {"type": "string", "minLength": 1, "maxLength": 127, "default": "Pacific Standard Time", "description": "An installed Windows time-zone ID. Pacific Standard Time includes automatic seasonal DST; do not replace it with an IANA ID."},
+        "utcOffsetSeconds": {"type": "integer", "minimum": -922337203685, "maximum": 922337203685, "default": 0, "description": "Additional UTC CLOCK SHIFT in seconds, NOT the time-zone offset. Virtual UTC = real UTC + this value. Keep 0 for the correct current time in Los Angeles; DST and UTC-7/UTC-8 come from timeZoneId. This is required, not a placeholder or auto-detect sentinel. The native validator also checks the resulting date range."}
+      }
+    },
+    "locale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "formatLocale", "uiLanguage"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "formatLocale": {"type": "string", "default": "en-US", "description": "Concrete Windows NLS locale for default date, number and currency formatting."},
+        "uiLanguage": {"type": "string", "default": "en-US", "description": "Concrete UI language, independent of formatLocale and homeRegion; does not translate resource text."}
+      }
+    },
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "homeRegion"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "homeRegion": {"type": "string", "pattern": "^[A-Za-z]{2}$", "default": "US", "description": "Concrete ISO two-letter country/region recognized by Windows NLS. Independent of language, time zone and IP address."}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "unknownVersionPolicy", "captureEnabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "unknownVersionPolicy": {"enum": ["block", "passthrough"], "default": "block", "description": "Compatibility policy for identity-matched managed Claude: block unsupported runtime adaptation, or roll back and pass through all virtualization."},
+        "captureEnabled": {"type": "boolean", "default": false, "description": "Optional bounded, in-memory diagnostic samples of Date, Intl, navigator and timing values in naturally created JS contexts. Read with Capture-Runtime.ps1. Not a logging, telemetry or packet-capture switch. Hook activation does not require capture. Enabling capture requires compatible sampling interfaces."}
+      }
+    }
+  }
+}

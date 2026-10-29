@@ -8,6 +8,8 @@
 | SDK 找不到 | 安装 `10.0.26100.0`，或明确选择已安装 SDK；不同 SDK 需要自行验证 ABI |
 | 配置缺失 | 构建后运行 `Initialize-Config.ps1` |
 | 初始化拒绝覆盖配置 | 已有文件会保留；备份并编辑部署 JSON，再运行校验器 |
+| 洛杉矶配置搭配 `utcOffsetSeconds=0` 是否错误 | 正确。该值是额外的 UTC 时钟偏移；UTC−7／UTC−8 由 Windows 时区和日期自动计算，使用 `Show-TimeConfig.ps1` 分别查看 |
+| 本地时间多差了 7／8 小时 | 检查是否将时区偏移 −25200／−28800 填进 `utcOffsetSeconds`；只切换时区应使用 0，恢复前先预览配置 |
 | 找不到 Store 包 | 在实际安装 Claude 的同一用户会话运行；检查包身份和 x64 入口 |
 | Code DLL 已加载但 `image-not-listed` | 检查 `config/claude-targets.json` 是否包含 Code 所在目录，重新 Enable 验签登记后，由用户重启对应进程；目录存在不等于文件已登记 |
 | `enumeration.changed`／`refreshRequired` | 查看展开目录和配置错误；配置有效后重新 Enable，不手工改身份清单 |
