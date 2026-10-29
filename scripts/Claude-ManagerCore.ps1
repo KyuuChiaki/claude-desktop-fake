@@ -318,16 +318,16 @@ function Cdf-Disable($C) {
 }
 function Cdf-Status($C) {
     $state=$null;$issues=@();try{$state=Cdf-ReadState $C}catch{$issues+=$_.Exception.Message}
-    $images=@();$skipped=@();$stale=$false;$package=$null;$enumerated=$null
+    $images=@();$registeredImages=@();$skipped=@();$stale=$false;$package=$null;$enumerated=$null
     if($state){
         foreach($i in $state.images){try{Cdf-AssertImage $C $i}catch{$issues+=$_.Exception.Message}}
         if((Cdf-Hash $C.TargetDll) -cne $state.dllSha256 -or (Cdf-Hash $C.Manifest) -cne $state.manifestSha256){$issues+='Deployment hash mismatch.'}
         try{Cdf-AssertDeployment $C $state}catch{$issues+=$_.Exception.Message}
-        try{$m=Get-Content -Raw -LiteralPath $C.Manifest|ConvertFrom-Json;foreach($i in $m.images){$match=$false;try{$match=(Cdf-Json (Get-CdfImageIdentity $i.path)) -ceq (Cdf-Json ($i|Select-Object name,path,nativePath,volumeSerial,fileId,size,lastWriteTimeUtcTicks))}catch{};$images+=[pscustomobject]@{name=$i.name;path=$i.path;signer=$C.Signer;signatureStatus='VerifiedAtEnable';fileIdentityCurrent=$match};if(-not $match){$stale=$true}}}catch{$issues+=$_.Exception.Message}
+        try{$m=Get-Content -Raw -LiteralPath $C.Manifest|ConvertFrom-Json;$registeredImages=@($m.images);foreach($i in $m.images){$match=$false;try{$match=(Cdf-Json (Get-CdfImageIdentity $i.path)) -ceq (Cdf-Json ($i|Select-Object name,path,nativePath,volumeSerial,fileId,size,lastWriteTimeUtcTicks))}catch{};$images+=[pscustomobject]@{name=$i.name;path=$i.path;signer=$C.Signer;signatureStatus='VerifiedAtEnable';fileIdentityCurrent=$match};if(-not $match){$stale=$true}}}catch{$issues+=$_.Exception.Message}
         $skipped=@($state.skipped)
         try{$package=Cdf-DiscoverPackage $C;if($package.root -ine $state.packageRoot){$stale=$true}}catch{$issues+=$_.Exception.Message;$stale=$true}
     }else{
-        try{$discovered=Cdf-DiscoverImages $C;$package=$discovered.package;$enumerated=$discovered.enumeration;$skipped=@($discovered.skipped);$images=@($discovered.images|ForEach-Object{[pscustomobject]@{name=$_.name;path=$_.path;signer=$C.Signer;signatureStatus='Valid';fileIdentityCurrent=$true}})}catch{$issues+=$_.Exception.Message}
+        try{$discovered=Cdf-DiscoverImages $C;$package=$discovered.package;$enumerated=$discovered.enumeration;$registeredImages=@($discovered.images);$skipped=@($discovered.skipped);$images=@($discovered.images|ForEach-Object{[pscustomobject]@{name=$_.name;path=$_.path;signer=$C.Signer;signatureStatus='Valid';fileIdentityCurrent=$true}})}catch{$issues+=$_.Exception.Message}
     }
     $enumeration=[ordered]@{configurationPath=$C.EnumerationConfigPath;sha256=$null;registeredSha256=$null;changed=$false;directories=@();error=$null}
     if($state -and $state.PSObject.Properties['enumerationConfigSha256']){$enumeration.registeredSha256=$state.enumerationConfigSha256}
@@ -375,9 +375,9 @@ function Cdf-Status($C) {
     $running=@(Get-CimInstance Win32_Process|Where-Object{$_.ExecutablePath -and (($_.Name -in $imageNames) -or ($_.ExecutablePath -in $imagePaths) -or (Cdf-PathInEnumeration $_.ExecutablePath $enumeration.directories))}|ForEach-Object{
         $diagnostic=Get-CdfClaudeProcessDiagnostic -ProcessId $_.ProcessId -DllPath $C.SourceDll -MapPath ([IO.Path]::ChangeExtension($C.SourceDll,'map'))
         $matched=$null -ne $diagnostic.identity -and $diagnostic.identity.reasonCode -eq 1
-        $listed=$_.ExecutablePath -in $imagePaths
-        $inEnumeration=Cdf-PathInEnumeration $_.ExecutablePath $enumeration.directories
-        [pscustomobject]@{pid=$_.ProcessId;parentPid=$_.ParentProcessId;name=$_.Name;path=$_.ExecutablePath;service=($_.Name -ieq 'cowork-svc.exe');listed=$listed;inEnumeration=$inEnumeration;requiresEnable=($enabled -and $inEnumeration -and -not $listed -and -not $matched);requiresRestart=($(if($enabled){($listed -and -not $matched) -or (-not $listed -and $matched)}else{$matched -and $diagnostic.providerLoaded -ne $false}));diagnostic=$diagnostic}
+        $resolution=Cdf-ResolveRunningImage $_.ExecutablePath $diagnostic $registeredImages $enumeration.directories
+        $listed=$resolution.listed;$inEnumeration=$resolution.inEnumeration
+        [pscustomobject]@{pid=$_.ProcessId;parentPid=$_.ParentProcessId;name=$_.Name;path=$_.ExecutablePath;resolvedImagePath=$resolution.resolvedPath;service=($_.Name -ieq 'cowork-svc.exe');listed=$listed;inEnumeration=$inEnumeration;requiresEnable=($enabled -and $inEnumeration -and -not $listed -and -not $matched);requiresRestart=($(if($enabled){($listed -and -not $matched) -or (-not $listed -and $matched)}else{$matched -and $diagnostic.providerLoaded -ne $false}));diagnostic=$diagnostic}
     })
     [pscustomobject]@{managed=[bool]$state;enabled=$enabled;images=$images;skipped=$skipped;stale=$stale;issues=$issues;enumeration=[pscustomobject]$enumeration;refreshRequired=([bool]$state -and ($stale -or $enumeration.changed -or @($running|Where-Object requiresEnable).Count -gt 0));running=$running;requiresRestart=(@($running|Where-Object requiresRestart).Count -gt 0);statePath=$C.State;manifestPath=$C.Manifest;pendingTransaction=(Test-Path -LiteralPath $C.Pending);providerPath=$C.TargetDll;providerSha256=(Cdf-Hash $C.TargetDll);configurationPath=(Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2\timezone.json');registryView='Registry64';runtime=[pscustomobject]$runtime}
 }

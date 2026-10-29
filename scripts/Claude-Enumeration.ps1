@@ -83,3 +83,24 @@ function Cdf-PathInEnumeration([string]$Path,$Directories) {
     }
     return $false
 }
+function Cdf-ResolveRunningImage([string]$ReportedPath,$Diagnostic,$Images,$Directories) {
+    # Store virtualization can expose an AppData alias through CIM while the
+    # provider sees the actual package-cache image. Resolve against the exact
+    # native path already captured by the provider; do not invent path aliases.
+    $nativePath=if($Diagnostic.identity){$Diagnostic.identity.currentImagePath}else{$null}
+    $entries=@($Images|Where-Object {
+        $_.path -ieq $ReportedPath -or ($nativePath -and $_.nativePath -ieq $nativePath)
+    })
+    $resolvedPath=$ReportedPath
+    if($entries.Count){$resolvedPath=$entries[0].path}
+    elseif($Diagnostic.identity -and $Diagnostic.identity.matchedImagePath){
+        # An old, now-removed identity remains visible in a running snapshot.
+        # Its path helps explain scope, but must not mark it as currently listed.
+        $resolvedPath=$Diagnostic.identity.matchedImagePath
+    }
+    [pscustomobject]@{
+        listed=($entries.Count -gt 0)
+        inEnumeration=((Cdf-PathInEnumeration $ReportedPath $Directories) -or (Cdf-PathInEnumeration $resolvedPath $Directories))
+        resolvedPath=$resolvedPath
+    }
+}

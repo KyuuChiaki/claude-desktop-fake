@@ -56,6 +56,7 @@
 - `enumeration.directories`：原始模板、展开后的路径和是否存在。
 - `refreshRequired`：策略／文件身份变化，或枚举目录内出现未登记的运行候选。
 - `running[].listed`／`inEnumeration`：进程是否已在清单中、是否位于当前枚举目录。
+- `running[].path`／`resolvedImagePath`：系统报告路径与经 Provider Native 路径核对后的实际清单路径；支持 Store 缓存重定向，避免误报已就绪进程需要重启。
 - `running[].requiresEnable`／`requiresRestart`：候选需要重新验签登记，或运行快照需要用户重启。
 
 同名清单外程序也可能因 IFEO 加载 Provider；身份不匹配时保持透传。状态检查包含相关同名进程，以便发现需要退出的旧运行快照。

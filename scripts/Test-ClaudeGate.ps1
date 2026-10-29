@@ -54,6 +54,28 @@ function Test-Probe([string]$path,[string]$expect,[string]$label,[string]$reason
     }finally{$p.Dispose()}
 }
 try{
+    $physical=Get-CdfImageIdentity $probe
+    $alias=Join-Path $results 'reported-alias\claude.exe'
+    $directories=@([pscustomobject]@{path=$run})
+    $withoutProvider=[pscustomobject]@{identity=$null}
+    $identity=[pscustomobject]@{currentImagePath=$physical.nativePath;matchedImagePath=$physical.path}
+    $diagnostic=[pscustomobject]@{identity=$identity}
+    $resolution=Cdf-ResolveRunningImage $probe $withoutProvider @($physical) $directories
+    Test-Check ($resolution.listed -and $resolution.inEnumeration -and $resolution.resolvedPath -ceq $probe) 'Status keeps direct-path registration when provider is absent'
+    $resolution=Cdf-ResolveRunningImage $alias $diagnostic @($physical) $directories
+    Test-Check ($resolution.listed -and $resolution.inEnumeration -and $resolution.resolvedPath -ceq $probe) 'Status resolves Store-reported aliases using exact provider Native paths'
+    $identity.matchedImagePath=''
+    $resolution=Cdf-ResolveRunningImage $alias $diagnostic @($physical) $directories
+    Test-Check ($resolution.listed -and $resolution.inEnumeration) 'Status recognizes a newly registered alias in an older rejected process snapshot'
+    $identity.currentImagePath=$physical.nativePath+'-different'
+    $resolution=Cdf-ResolveRunningImage $alias $diagnostic @($physical) $directories
+    Test-Check (-not $resolution.listed -and -not $resolution.inEnumeration -and $resolution.resolvedPath -ceq $alias) 'Status does not infer identity from a similar Native path or image name'
+    $identity.currentImagePath=$physical.nativePath;$identity.matchedImagePath=$physical.path
+    $resolution=Cdf-ResolveRunningImage $alias $diagnostic @() $directories
+    Test-Check (-not $resolution.listed -and $resolution.inEnumeration -and $resolution.resolvedPath -ceq $probe) 'Status does not relist a removed identity from an old matched snapshot'
+    $unknown=Join-Path $run 'unknown.exe'
+    $resolution=Cdf-ResolveRunningImage $unknown $withoutProvider @($physical) $directories
+    Test-Check (-not $resolution.listed -and $resolution.inEnumeration) 'Status preserves unregistered candidates within configured roots'
     foreach($dir in @((Split-Path -Parent $root),$root,(Split-Path -Parent $context.Manifest))){Cdf-SecureDirectory $dir}
     Test-Probe $probe absent 'unregistered baseline'
     foreach($name in @('CdfClaudeGateProbe64.exe','CdfClaudeGateOther64.exe')){if((Test-Registry $name) -cne 'null'){throw "Preexisting test IFEO: $name"}}
