@@ -9,7 +9,8 @@
   "schemaVersion": 1,
   "imageDirectories": [
     "%CLAUDE_PACKAGE_ROOT%",
-    "%LOCALAPPDATA%\\Claude-3p"
+    "%LOCALAPPDATA%\\Claude-3p",
+    "%LOCALAPPDATA%\\Packages"
   ]
 }
 ```
@@ -62,5 +63,9 @@
 ## Claude Code 的覆盖边界
 
 默认附加目录包含 Desktop 下载的 Code 版本，例如 `%LOCALAPPDATA%\Claude-3p\claude-code\<version>\<hash>\claude.exe`。新版本或替换文件需要再次 Enable；文件夹在枚举范围内并不等于已登记。
+
+`%LOCALAPPDATA%\Packages` 递归覆盖当前用户的 Store 包数据目录，包括 `%LOCALAPPDATA%\Packages\AnthropicPBC.Claude_fnn82j28hfe8t\LocalCache\Roaming\Claude\claude-code`。Store 进程可能把这里的映像显示为 `%APPDATA%\Claude\claude-code`，而管理工具在包外访问时须登记实际缓存文件。无需固定 Code 版本或哈希子目录，也无需写入用户名。
+
+Packages 内其他程序也会被枚举，但只有通过既有 Anthropic 签名与文件身份检查的 EXE 才纳入清单；该目录不是全体程序的 Hook 白名单。目录较大时枚举和验签会更久，重解析点及读取失败仍按上述规则处理。
 
 纳入文件身份后，可使用已启用的 Windows 时间／区域 Hook。Claude Code 内部 JavaScript 运行时的 Date、Intl、语言及网络行为仍须单独验收，不能用 Electron 的适配记录或 DLL 已加载代替。schema 2 不启用专门的运行时扩展。
