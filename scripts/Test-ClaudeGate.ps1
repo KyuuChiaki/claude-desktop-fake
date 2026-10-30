@@ -53,6 +53,18 @@ function Test-Probe([string]$path,[string]$expect,[string]$label,[string]$reason
         if(-not $record.passed -or ($reason -and $o.tls.identityReason -ne $reason)){throw "Gate probe failed: $label $text $stderr"}
     }finally{$p.Dispose()}
 }
+function Test-StartupBlocked([string]$path,[string]$label){
+    $p=[Diagnostics.Process]::new();$p.StartInfo.FileName=$path;$p.StartInfo.UseShellExecute=$false
+    $p.StartInfo.RedirectStandardOutput=$true;$p.StartInfo.RedirectStandardError=$true;$p.StartInfo.CreateNoWindow=$true
+    try{
+        [void]$p.Start();$out=$p.StandardOutput.ReadToEndAsync();$err=$p.StandardError.ReadToEndAsync()
+        if(-not $p.WaitForExit(10000)){$p.Kill();throw 'Startup guard probe timed out.'}
+        $code=[BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$p.ExitCode),0)
+        $stdout=$out.GetAwaiter().GetResult();$stderr=$err.GetAwaiter().GetResult()
+        Test-Check ($code -eq [Convert]::ToUInt32('E0CDF601',16) -and -not $stdout) $label
+        $cases[$cases.Count-1]|Add-Member -NotePropertyMembers @{exitCode=$code;stdout=$stdout;stderr=$stderr}
+    }finally{$p.Dispose()}
+}
 try{
     $physical=Get-CdfImageIdentity $probe
     $alias=Join-Path $results 'reported-alias\claude.exe'
@@ -105,6 +117,15 @@ try{
     Test-Check ($status.enabled -and $status.images.Count -eq 2 -and $status.skipped.Count -eq 3) 'valid signer included; unsigned wrong signer and query error skipped'
     $originalState=Cdf-Hash $context.State;$status=Invoke-CdfClaudeManager $context Enable
     Test-Check ((Cdf-Hash $context.State) -ceq $originalState) 'repeat enable preserves first restoration record'
+    $firstRecords=Cdf-Json ((Get-Content $context.State -Raw|ConvertFrom-Json).images)
+    $allCandidates=$package.files
+    try{
+        $package.files=@($probe,$second);$status=Invoke-CdfClaudeManager $context Enable
+        Test-Check ($status.skipped.Count -eq 0 -and (Cdf-Json ((Get-Content $context.State -Raw|ConvertFrom-Json).images)) -ceq $firstRecords) 'metadata-only refresh updates skipped candidates without replacing original IFEO records'
+    }finally{$package.files=$allCandidates}
+    $status=Invoke-CdfClaudeManager $context Enable
+    Test-Check ($status.skipped.Count -eq 3) 'new skipped candidates are reported even when all registered image identities are unchanged'
+    $originalState=Cdf-Hash $context.State
     Test-Probe $probe match 'TLS and main ready after identity match' matched
     Test-Probe $second match 'second image TLS and main ready after identity match' matched
     Test-Probe $other deny 'same image name at another path passes through' image-not-listed
@@ -350,6 +371,40 @@ try{
     Invoke-CdfClaudeManager $context Disable|Out-Null
     Test-Check ((Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $baselineRegistry -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq 'null') 'configured disable restores exact pre-test registry values'
     $context.EnumerationConfigPath=$null;$context.Discover={$package}.GetNewClosure()
+    $savedManifest=$null
+    $context.StartupGuardScopes=@([CdfClaudeFile]::NativePath($run).TrimEnd('\')+'\')
+    $status=Invoke-CdfClaudeManager $context Enable
+    $guardState=Get-Content -LiteralPath $context.State -Raw|ConvertFrom-Json
+    Test-Check ($status.enabled -and @($guardState.images|Where-Object {@($_.installedValues).Count -eq 4}).Count -eq 2) 'automatic admission records the startup guard together with original IFEO values'
+    Test-Probe $probe match 'registered image still reaches TLS with startup protection enabled' matched
+    $newDirectory=Join-Path $run 'auto-upgrade';[IO.Directory]::CreateDirectory($newDirectory)|Out-Null
+    $newVersion=Join-Path $newDirectory 'CdfClaudeGateProbe64.exe';Copy-Item -LiteralPath $probe -Destination $newVersion
+    Test-StartupBlocked $newVersion 'an unregistered version in a protected root exits before application output'
+    $context.StartupGuardScopes=@($run.TrimEnd('\')+'\')
+    Invoke-CdfClaudeManager $context Enable|Out-Null
+    Test-StartupBlocked $newVersion 'DOS drive scopes are resolved at startup instead of retaining boot-specific volume names'
+    $foreignDirectory=Join-Path $results ('auto-foreign-'+[Guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($foreignDirectory)|Out-Null
+    $foreign=Join-Path $foreignDirectory 'CdfClaudeGateProbe64.exe';Copy-Item -LiteralPath $probe -Destination $foreign
+    Test-Probe $foreign deny 'same-name image outside startup-protected roots keeps transparent behavior' image-not-listed
+    $guardManifest=[IO.File]::ReadAllBytes($context.Manifest)
+    try{
+        [IO.File]::WriteAllText($context.Manifest,'{')
+        Test-StartupBlocked $probe 'a damaged identity manifest does not admit a protected process with real settings'
+    }finally{[IO.File]::WriteAllBytes($context.Manifest,$guardManifest)}
+    $key=$ifeo.OpenSubKey('CdfClaudeGateProbe64.exe',$true)
+    try{
+        $key.SetValue('CdfUnverifiedImageGuard','bad-data',[Microsoft.Win32.RegistryValueKind]::String)
+        Test-StartupBlocked $newVersion 'malformed guard configuration fails closed with a recognizable exit code'
+    }finally{$key.SetValue('CdfUnverifiedImageGuard',[string[]]$context.StartupGuardScopes,[Microsoft.Win32.RegistryValueKind]::MultiString);$key.Dispose()}
+    $originalFiles=$package.files
+    try{
+        $package.files+=@($newVersion);Invoke-CdfClaudeManager $context Enable|Out-Null
+        Test-Probe $newVersion match 'a newly verified version is admitted after the manifest transaction' matched
+    }finally{$package.files=$originalFiles}
+    Invoke-CdfClaudeManager $context Disable|Out-Null
+    Test-Check ((Test-Registry 'CdfClaudeGateProbe64.exe') -ceq $baselineRegistry -and (Test-Registry 'CdfClaudeGateOther64.exe') -ceq 'null') 'Disable restores original IFEO types and removes the owned startup guard'
+    Test-Probe $newVersion absent 'after Disable a new version returns to the unregistered baseline'
+    $context.StartupGuardScopes=$null
 }catch{$failure=$_.Exception.ToString()+"`n"+$_.ScriptStackTrace}finally{
     if($savedManifest -and (Test-Path -LiteralPath $context.State)){try{[IO.File]::WriteAllBytes($context.Manifest,$savedManifest)}catch{$cleanup+=$_.Exception.Message}}
     try{Invoke-CdfClaudeManager $context Disable|Out-Null}catch{$cleanup+=$_.Exception.Message}

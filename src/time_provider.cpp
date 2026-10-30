@@ -379,6 +379,7 @@ extern "C" BOOL WINAPI CdfTimeZoneEntry(HINSTANCE, DWORD reason, LPVOID reserved
         state |= 1;
 #if defined(CDF_CLAUDE_IDENTITY_REQUIRED)
         identity_matched=cdf::claude::MatchesCurrentImage();
+        if(!identity_matched&&cdf::claude::BlockUnverifiedImage())return FALSE;
         if (identity_matched) Initialize();
 #else
         Initialize();

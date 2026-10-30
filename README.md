@@ -35,7 +35,7 @@ Windows x64 的进程内时间、时区、区域格式和语言虚拟化实验�
 .\scripts\Manage-Claude.ps1 -Action Status
 ```
 
-初始化工具创建经过校验的首次配置，拒绝覆盖已有不同内容。然后由用户退出并重新启动 Claude；服务的重启也由用户安排。命令不自动改变应用／服务生命周期。
+初始化工具创建经过校验的首次配置，拒绝覆盖已有不同内容。`Enable` 同时安装并立即启动 SYSTEM 文件／进程监控，创建开机及当前用户登录触发的计划任务。随后由用户退出并重新启动 Claude；服务的重启也由用户安排。监控发现有效 Anthropic 签名且未登记的运行进程时会终止该进程，再刷新登记；不会自动重新启动应用。
 
 关闭：
 
@@ -43,7 +43,7 @@ Windows x64 的进程内时间、时区、区域格式和语言虚拟化实验�
 .\scripts\Manage-Claude.ps1 -Action Disable
 ```
 
-Disable 恢复 IFEO，但不卸载已运行进程中的 DLL；进程退出后恢复基线。保留部署和恢复材料的规则见 [使用与恢复](docs/usage.md)。
+`Disable` 先取消后台刷新、停止监控并自动删除本工具的开机任务，再恢复 IFEO。它不卸载已运行进程中的 DLL；进程退出后恢复基线。保留部署和恢复材料的规则见 [使用与恢复](docs/usage.md)。
 
 ## 默认配置
 
@@ -78,11 +78,11 @@ Disable 恢复 IFEO，但不卸载已运行进程中的 DLL；进程退出后恢
 
 ## 更新后的兼容处理
 
-Claude 更新后重新执行 `Enable`。工具从当前用户的 Store 注册发现路径，重新检查有效 Authenticode 签名、`Anthropic, PBC` 签名者和具体文件身份，再进行离线兼容解析。
+`Enable` 后，文件监控对新建、替换和版本目录变动进行去抖刷新，并每五分钟完整复核。每次登记仍重新检查有效 Authenticode 签名、`Anthropic, PBC` 签名者和具体文件身份，再进行离线兼容解析。也可手动重新执行 `Enable`。
 
-EXE 枚举目录由 [config/claude-targets.json](config/claude-targets.json) 配置，默认包含动态发现的 Store 包、当前用户的 `%LOCALAPPDATA%\Claude-3p`、`%LOCALAPPDATA%\Packages` 和 `%ProgramFiles%\WindowsApps\AnthropicPBC.Claude_*`，覆盖 Desktop 下载的 Claude Code、Store 重定向缓存及并存的 Claude 安装版本。WindowsApps 只进入名称匹配的目录，目录模式不固定架构或发布者 ID 后缀。目录变量无需写入用户名或系统盘盘符。每个文件仍须独立验签和登记，修改目录或下载新版本后重新 Enable；详见 [枚举目录](docs/targets.md)。
+EXE 枚举目录由 [config/claude-targets.json](config/claude-targets.json) 配置，默认包含动态发现的 Store 包、当前用户的 `%LOCALAPPDATA%\Claude-3p`、`%LOCALAPPDATA%\Packages` 和 `%ProgramFiles%\WindowsApps\AnthropicPBC.Claude_*`，覆盖 Desktop 下载的 Claude Code、Store 重定向缓存及并存的 Claude 安装版本。WindowsApps 只进入名称匹配的目录，目录模式不固定架构或发布者 ID 后缀。目录变量无需写入用户名或系统盘盘符。每个文件仍须独立验签和登记；修改仓库目录配置后重新 `Enable`，以更新管理员保护的监控快照。下载到受监控目录的新版本会自动刷新；详见 [枚举目录](docs/targets.md)。
 
-完整映像命中、同运行时重打包或已验证 ABI 自动解析均会生成绑定。定位不唯一、ABI 改变或证据不足时拒绝适配。默认 block 会在启用前拒绝不支持的目标；启动复核失败按配置阻止或整套透传。身份不匹配的同名程序保持透传。
+完整映像命中、同运行时重打包或已验证 ABI 自动解析均会生成绑定。定位不唯一、ABI 改变或证据不足时拒绝适配。默认 block 会在启用前拒绝不支持的目标；启动复核失败按配置阻止或整套透传。对于已经管理的文件名，受保护目录内尚未登记的新版本在应用 TLS 前被阻止；范围外同名程序保持透传。全新文件名的进程只能在启动后检测并终止，文件监控不提供首条指令前的全局拦截保证。详见 [自动刷新与开机监控](docs/automatic-refresh.md)。
 
 Provider 自身升级先 `Disable`，再替换构建并 `Enable`。不强行覆盖调试器、其他 Verifier、过滤配置或外部修改。
 
@@ -94,8 +94,9 @@ Provider 自身升级先 `Disable`，再替换构建并 `Enable`。不强行覆�
 | [使用](docs/usage.md) | 首次部署、启停、更新、通用 Probe、诊断和恢复 |
 | [配置](docs/configuration.md) | 时间、区域、语言、地理区域与失败策略 |
 | [枚举目录](docs/targets.md) | JSON 目录列表、用户变量、Code 缓存、身份刷新与状态 |
+| [开机监控](docs/automatic-refresh.md) | Enable／Disable 绑定、自动验签、启动门控、进程处理与故障恢复 |
 | [兼容性](docs/compatibility.md) | 分级识别、离线分析、绑定和支持边界 |
-| [测试](docs/testing.md) | 9 项无注册检查、19 项完整套件和夹具准备 |
+| [测试](docs/testing.md) | 无注册检查、完整套件、监控测试和夹具准备 |
 | [故障排查](docs/troubleshooting.md) | 错误分类、冲突与中断恢复 |
 | [架构](docs/architecture.md) | 源码导航、加载链与诊断 ABI |
 | [验收摘要](docs/validation.md) | 参考环境事实与实际进程证据边界 |

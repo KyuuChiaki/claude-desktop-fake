@@ -14,6 +14,13 @@ public static class CdfClaudeFile {
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandleEx(SafeFileHandle file,int kind,IntPtr data,uint size);
   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileSizeEx(SafeFileHandle file,out long size);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern uint QueryDosDevice(string drive,char[] target,uint size);
+  public static string NativePath(string path) {
+    path=System.IO.Path.GetFullPath(path);
+    if(path.Length<3 || path[1]!=':' || path[2]!='\\') throw new ArgumentException("A drive-absolute path is required");
+    char[] device=new char[4096];if(QueryDosDevice(path.Substring(0,2),device,(uint)device.Length)==0)throw new Win32Exception(Marshal.GetLastWin32Error());
+    int end=Array.IndexOf(device,'\0');if(end<=0)throw new ArgumentException("Invalid DOS device path");
+    return new string(device,0,end)+path.Substring(2);
+  }
   public static Identity Get(string path) {
     path=System.IO.Path.GetFullPath(path);
     if(path.Length<3 || path[1]!=':' || path[2]!='\\') throw new ArgumentException("A drive-absolute path is required");

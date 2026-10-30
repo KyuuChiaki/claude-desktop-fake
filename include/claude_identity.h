@@ -32,6 +32,8 @@ static_assert(sizeof(IdentityStatus) == 2280);
 static_assert(offsetof(IdentityStatus, current_image_path) == 200);
 
 bool MatchesCurrentImage();
+inline constexpr DWORD UnverifiedImageExit=0xE0CDF601;
+bool BlockUnverifiedImage();
 struct RuntimeBinding { DWORD version;WCHAR type[16],adapter_id[96],policy[16];BYTE binding_hash[32]; };
 void QueryRuntimeBinding(RuntimeBinding& output);
 bool ReadRuntimeBinding(compat::Binding& output,DWORD& error);

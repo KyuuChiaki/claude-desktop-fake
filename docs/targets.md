@@ -20,7 +20,7 @@
 
 `%ProgramFiles%\WindowsApps\AnthropicPBC.Claude_*` 在默认 Store 安装目录中，先按名称选择 Claude 的一级版本目录，再递归扫描这些目录。默认安装位置通常为 `C:\Program Files\WindowsApps`；其他 Store 应用不会被递归扫描。模式不固定架构或发布者 ID 后缀，EXE 的架构与签名仍单独校验。可在同一次 Enable 中发现并存的 Claude 版本，包括已下载但尚未成为当前用户注册版本的安装目录。`%CLAUDE_PACKAGE_ROOT%` 仍用于定位和校验当前注册主程序，必须保留。其他盘符的独立应用库需单独添加同类规则。
 
-新增目录只是扩大候选扫描范围。编辑配置或 Store 下载新版本后，仍需手动执行 Enable，将验签通过的具体文件身份写入清单；目录中的全部程序不会因此自动启用 Hook。现有 64 条已验证映像及 64 KiB 清单限制继续生效。
+新增目录只是扩大候选扫描范围。编辑仓库配置后执行 Enable，更新管理员保护的监控快照；下载到监控目录的新版本会自动重新验签登记，目录中的全部程序不会因此自动启用 Hook。现有 64 条已验证映像及 64 KiB 清单限制继续生效；达到限制时刷新失败并报告，不自动删去旧恢复材料。
 
 ## 变量与路径
 
@@ -74,11 +74,11 @@
 - `running[].path`／`resolvedImagePath`：系统报告路径与经 Provider Native 路径核对后的实际清单路径；支持 Store 缓存重定向，避免误报已就绪进程需要重启。
 - `running[].requiresEnable`／`requiresRestart`：候选需要重新验签登记，或运行快照需要用户重启。
 
-同名清单外程序也可能因 IFEO 加载 Provider；身份不匹配时保持透传。状态检查包含相关同名进程，以便发现需要退出的旧运行快照。
+同名清单外程序也可能因 IFEO 加载 Provider；受保护目录内身份不匹配会在 TLS 前被阻止，范围外则保持透传。状态检查包含相关同名进程，以便发现需要退出的旧运行快照。任务、心跳及处理记录见 `automaticRefresh`，启动前保护与全新文件名的边界见 [automatic-refresh.md](automatic-refresh.md)。
 
 ## Claude Code 的覆盖边界
 
-默认附加目录包含 Desktop 下载的 Code 版本，例如 `%LOCALAPPDATA%\Claude-3p\claude-code\<version>\<hash>\claude.exe`。新版本或替换文件需要再次 Enable；文件夹在枚举范围内并不等于已登记。
+默认附加目录包含 Desktop 下载的 Code 版本，例如 `%LOCALAPPDATA%\Claude-3p\claude-code\<version>\<hash>\claude.exe`。新版本或替换文件由监控重新验签登记；文件夹在枚举范围内并不等于当下已登记。已管理文件名可使用启动门控等待登记，全新名字仍有启动后检测窗口。
 
 `%LOCALAPPDATA%\Packages` 递归覆盖当前用户的 Store 包数据目录，包括 `%LOCALAPPDATA%\Packages\AnthropicPBC.Claude_fnn82j28hfe8t\LocalCache\Roaming\Claude\claude-code`。Store 进程可能把这里的映像显示为 `%APPDATA%\Claude\claude-code`，而管理工具在包外访问时须登记实际缓存文件。无需固定 Code 版本或哈希子目录，也无需写入用户名。
 

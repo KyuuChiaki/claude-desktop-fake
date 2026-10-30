@@ -8,6 +8,9 @@
 extern "C" {
 NTSYSAPI NTSTATUS NTAPI NtQueryInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, ULONG);
 NTSYSAPI BOOLEAN NTAPI RtlEqualUnicodeString(const UNICODE_STRING*, const UNICODE_STRING*, BOOLEAN);
+NTSYSAPI NTSTATUS NTAPI NtTerminateProcess(HANDLE,NTSTATUS);
+NTSYSAPI NTSTATUS NTAPI NtOpenSymbolicLinkObject(PHANDLE,ACCESS_MASK,POBJECT_ATTRIBUTES);
+NTSYSAPI NTSTATUS NTAPI NtQuerySymbolicLinkObject(HANDLE,PUNICODE_STRING,PULONG);
 }
 
 namespace {
@@ -22,6 +25,12 @@ struct Image { WCHAR name[128],path[520],native_path[520]; FileId file; ULONGLON
 struct Manifest { WCHAR signer[64]; ULONG count,version; Image images[max_images]; };
 cdf::claude::IdentityStatus identity_status{};
 cdf::claude::RuntimeBinding runtime_binding{};
+struct StartupGuardStatus {
+    DWORD size,version,enabled,protected_scope,blocked,error_code; LONG native_status; DWORD scope_count;
+    WCHAR matched_scope[520];
+};
+static_assert(sizeof(StartupGuardStatus)==1072);
+StartupGuardStatus startup_guard{};
 
 bool Equal(const WCHAR* a,const WCHAR* b) {
     UNICODE_STRING x,y; RtlInitUnicodeString(&x,a); RtlInitUnicodeString(&y,b);
@@ -30,6 +39,87 @@ bool Equal(const WCHAR* a,const WCHAR* b) {
 bool BytesEqual(const BYTE* a,const BYTE* b,ULONG size) {
     for (ULONG i=0;i<size;++i) if (a[i]!=b[i]) return false;
     return true;
+}
+bool SameCharacter(WCHAR a,WCHAR b) {
+    UNICODE_STRING x{2,2,&a},y{2,2,&b};
+    return RtlEqualUnicodeString(&x,&y,TRUE)!=FALSE;
+}
+bool FolderMatch(const WCHAR* pattern,ULONG count,const WCHAR* text,ULONG length) {
+    constexpr ULONG none=0xffffffffUL;ULONG p=0,t=0,star=none,retry=0;
+    while(t<length){
+        if(p<count&&(pattern[p]==L'?'||SameCharacter(pattern[p],text[t]))){++p;++t;}
+        else if(p<count&&pattern[p]==L'*'){star=p++;retry=t;}
+        else if(star!=none){p=star+1;t=++retry;}
+        else return false;
+    }
+    while(p<count&&pattern[p]==L'*')++p;
+    return p==count;
+}
+bool GuardScopeMatch(const WCHAR* scope,const WCHAR* image) {
+    ULONG s=0,i=0;
+    while(scope[s]){
+        if(scope[s]==L'\\'){if(image[i]!=L'\\')return false;++s;++i;continue;}
+        const ULONG begin=s,at=i;
+        while(scope[s]&&scope[s]!=L'\\')++s;
+        while(image[i]&&image[i]!=L'\\')++i;
+        if(!FolderMatch(scope+begin,s-begin,image+at,i-at))return false;
+    }
+    return image[i]!=0;
+}
+bool NativeGuardScope(const WCHAR* scope,WCHAR (&native)[520],NTSTATUS& status) {
+    if(scope[0]==L'\\')return cdf::CopyText(native,520,scope);
+    if(!scope[0]||scope[1]!=L':'||scope[2]!=L'\\'){status=invalid_data;return false;}
+    WCHAR drive[]=L"\\??\\C:";drive[4]=scope[0];UNICODE_STRING name;RtlInitUnicodeString(&name,drive);
+    OBJECT_ATTRIBUTES attributes;InitializeObjectAttributes(&attributes,&name,OBJ_CASE_INSENSITIVE,nullptr,nullptr);
+    HANDLE link=nullptr;status=NtOpenSymbolicLinkObject(&link,1,&attributes);if(status<0)return false;
+    UNICODE_STRING target{0,static_cast<USHORT>(sizeof(native)-sizeof(WCHAR)),native};
+    status=NtQuerySymbolicLinkObject(link,&target,nullptr);NtClose(link);if(status<0)return false;
+    if(target.Length%2||target.Length>=sizeof(native)){status=invalid_data;return false;}
+    native[target.Length/2]=0;
+    if(!cdf::CopyText(native+target.Length/2,520-target.Length/2,scope+2)){status=invalid_data;return false;}
+    return true;
+}
+bool GuardRequired() {
+    auto& out=startup_guard;cdf::Zero(&out,sizeof(out));out.size=sizeof(out);out.version=1;
+    const WCHAR* image=identity_status.current_image_path;const WCHAR* file=image;
+    for(const WCHAR* p=image;*p;++p)if(*p==L'\\')file=p+1;
+    if(!*file){
+        const auto* parameters=NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters;
+        if(!parameters||!parameters->ImagePathName.Buffer||!parameters->ImagePathName.Length)return false;
+        static WCHAR fallback[520]{};
+        if(parameters->ImagePathName.Length>=sizeof(fallback))return false;
+        cdf::Copy(fallback,parameters->ImagePathName.Buffer,parameters->ImagePathName.Length);
+        file=fallback;for(const WCHAR* p=fallback;*p;++p)if(*p==L'\\')file=p+1;
+    }
+    WCHAR key_path[512]{};
+    cdf::CopyText(key_path,512,L"\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\");
+    ULONG at=0;while(key_path[at])++at;
+    if(!cdf::CopyText(key_path+at,512-at,file))return false;
+    UNICODE_STRING name;RtlInitUnicodeString(&name,key_path);OBJECT_ATTRIBUTES attributes;
+    InitializeObjectAttributes(&attributes,&name,OBJ_CASE_INSENSITIVE,nullptr,nullptr);
+    HANDLE key=nullptr;out.native_status=NtOpenKey(&key,KEY_QUERY_VALUE|KEY_WOW64_64KEY,&attributes);
+    const auto missing=[](NTSTATUS status){return status==static_cast<NTSTATUS>(0xc0000034UL)||status==static_cast<NTSTATUS>(0xc000003aUL);};
+    if(out.native_status<0){if(missing(out.native_status))return false;out.enabled=1;out.error_code=RtlNtStatusToDosError(out.native_status);return true;}
+    RtlInitUnicodeString(&name,L"CdfUnverifiedImageGuard");alignas(8) static BYTE data[32780]{};ULONG returned=0;
+    out.native_status=NtQueryValueKey(key,&name,2,data,sizeof(data),&returned);NtClose(key);
+    if(out.native_status<0){if(missing(out.native_status))return false;out.enabled=1;out.error_code=RtlNtStatusToDosError(out.native_status);return true;}
+    out.enabled=1;const auto* value=reinterpret_cast<const PartialValue*>(data);
+    if(returned<12||value->type!=REG_MULTI_SZ||value->length<4||value->length%2||value->length>returned-12||value->length>32768){out.error_code=ERROR_INVALID_DATA;return true;}
+    const auto* scopes=reinterpret_cast<const WCHAR*>(value->data);const ULONG length=value->length/2;
+    if(scopes[length-1]||scopes[length-2]){out.error_code=ERROR_INVALID_DATA;return true;}
+    ULONG cursor=0;
+    while(cursor+1<length&&scopes[cursor]){
+        const ULONG start=cursor;while(cursor<length&&scopes[cursor])++cursor;
+        if(cursor==length||cursor-start>=520||scopes[cursor-1]!=L'\\'||++out.scope_count>16){out.error_code=ERROR_INVALID_DATA;return true;}
+        WCHAR native[520]{};NTSTATUS mapping=0;
+        if(!NativeGuardScope(scopes+start,native,mapping)){
+            if(!missing(mapping)){out.native_status=mapping;out.error_code=ERROR_INVALID_DATA;return true;}
+        }else if(*image&&GuardScopeMatch(native,image)){out.protected_scope=1;cdf::CopyText(out.matched_scope,520,scopes+start);}
+        ++cursor;
+    }
+    if(!out.scope_count||cursor!=length-1){out.error_code=ERROR_INVALID_DATA;return true;}
+    // An unavailable process path cannot safely be admitted under an enabled guard.
+    return !*image||out.protected_scope!=0;
 }
 int Hex(char c) {
     if (c>='0' && c<='9') return c-'0';
@@ -225,6 +315,12 @@ bool CurrentImage(cdf::claude::IdentityStatus& out) {
 }
 }
 namespace cdf::claude {
+bool BlockUnverifiedImage(){
+    if(!GuardRequired())return false;
+    startup_guard.blocked=1;
+    NtTerminateProcess(reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(-1)),static_cast<NTSTATUS>(UnverifiedImageExit));
+    return true;
+}
 bool MatchesCurrentImage() {
     auto& out=identity_status; cdf::Zero(&out,sizeof(out)); out.size=sizeof(out); out.version=1; out.state=1;
     if(!CurrentImage(out)) { out.error_code=RtlNtStatusToDosError(out.native_status); return false; }
@@ -271,4 +367,8 @@ bool ReadRuntimeBinding(compat::Binding& output,DWORD& error){
 extern "C" __declspec(dllexport) DWORD WINAPI CdfClaudeQueryIdentityStatus(cdf::claude::IdentityStatus* output,DWORD size) {
     if(!output || size!=sizeof(*output)) return ERROR_INVALID_PARAMETER;
     cdf::claude::QueryIdentityStatus(*output); return ERROR_SUCCESS;
+}
+extern "C" __declspec(dllexport) DWORD WINAPI CdfClaudeQueryStartupGuardStatus(StartupGuardStatus* output,DWORD size) {
+    if(!output||size!=sizeof(*output))return ERROR_INVALID_PARAMETER;
+    cdf::Copy(output,&startup_guard,sizeof(*output));output->size=sizeof(*output);output->version=1;return ERROR_SUCCESS;
 }

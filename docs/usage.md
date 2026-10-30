@@ -12,15 +12,15 @@
 
 初始化工具校验仓库模板并创建部署配置。已有不同配置时拒绝覆盖；已有相同内容时幂等返回。可先运行 `Initialize-Config.ps1 -WhatIf` 查看结果。`Enable` 校验配置但不改写它。
 
-然后由用户退出并重新启动 Claude。服务进程需要用户自行决定何时重启。工具不操作应用或服务生命周期。
+`Enable` 同时安装并立即启动 SYSTEM 文件／进程监控及开机任务。随后由用户退出并重新启动 Claude；服务重启仍由用户控制。监控会终止已确认有效 Anthropic 签名、但未登记或缺少 Provider 的进程，随后尝试刷新登记。工具不会自动重新启动这些进程。
 
 ## 三个命令
 
 | 命令 | 权限 | 行为 |
 |---|---|---|
-| `Enable` | 管理员 x64 | 发现当前 Store 包、验签、生成身份清单和兼容绑定，事务写入 IFEO |
-| `Status` | 只读；进程检查可能需要提升权限 | 显示目标、跳过项、过期状态、绑定、运行进程及待重启信息 |
-| `Disable` | 管理员 x64 | 检查冲突并恢复原 IFEO 值、类型和存在状态 |
+| `Enable` | 管理员 x64 | 验签、登记身份与兼容绑定、事务写入 IFEO 和启动门控，创建开机任务并启动监控 |
+| `Status` | 只读；进程检查可能需要提升权限 | 显示目标、绑定、运行进程、任务、监控心跳及刷新错误 |
+| `Disable` | 管理员 x64 | 先取消刷新并停止监控、删除本工具任务，再检查冲突并恢复原 IFEO 值、类型和存在状态 |
 
 ```powershell
 .\scripts\Manage-Claude.ps1 -Action Disable
@@ -30,7 +30,7 @@ IFEO 仅影响之后启动的进程。Disable 不会卸载已运行进程中的 
 
 ## Store 更新与 Provider 升级
 
-Claude 更新后重新执行 `Enable`。工具重新发现安装目录并验签；不依赖含版本号的固定 WindowsApps 路径。支持的运行时会生成新绑定，过期的文件身份清单会刷新。没有重新 Enable 的新文件保持身份不匹配透传。
+文件监控自动发现受监控目录的新版本并重新验签、刷新文件身份及兼容绑定，不依赖含版本号的固定 WindowsApps 路径。已管理的文件名在保护目录内身份不匹配时，会在应用 TLS 前退出，退出码 `0xE0CDF601`；登记成功后由用户重新启动。全新文件名没有既有 IFEO 规则，监控只能在启动后发现并终止，退出码 `0xE0CDF602`。目录外同名程序仍透传。修改仓库的目录配置后重新执行 `Enable`，更新监控快照。完整边界和任务恢复见 [automatic-refresh.md](automatic-refresh.md)。
 
 升级本项目 DLL 时先用原构建执行 `Disable`，再构建或替换 DLL，最后 `Enable`。有受管理映像时，工具拒绝替换共享 Provider。确认旧进程已退出后再替换被占用的文件。
 
@@ -38,7 +38,7 @@ Claude 更新后重新执行 `Enable`。工具重新发现安装目录并验签�
 
 当前目标为包 `AnthropicPBC.Claude`、家族 `AnthropicPBC.Claude_fnn82j28hfe8t`、x64 应用入口。EXE 必须有有效 Authenticode 签名，签名者 SimpleName 与 `Anthropic, PBC` 忽略大小写完全相同。主程序不符合则整批拒绝；其他不符合项显示为跳过。证书指纹不固定，以允许正常证书轮换。
 
-IFEO 按 EXE 文件名触发，同名其他程序也会加载门控 DLL。Provider 在握手时核对管理员清单中的路径、卷、File ID、大小和写入时间；不匹配时不启用虚拟化。运行时不在加载器锁下调用 WinVerifyTrust。
+IFEO 按 EXE 文件名触发，同名其他程序也会加载门控 DLL。Provider 在握手时核对管理员清单中的路径、卷、File ID、大小和写入时间；保护目录内不匹配时阻止启动，其他路径不启用虚拟化并透传。运行时不在加载器锁下调用 WinVerifyTrust。
 
 使用另一个管理员账号会读取那个账号的包注册，不能代替当前用户的 Store 注册。
 
@@ -94,6 +94,7 @@ Electron 测试映像另传 `-ImagePath` 生成绑定，详见 [compatibility.md
 | `%SystemRoot%/System32` | 已部署 Provider DLL |
 | `%ProgramData%/ClaudeDesktopFake/stage2` | 时间配置、通用测试部署和恢复记录 |
 | `%ProgramData%/ClaudeDesktopFake/stage3/claude` | Claude 身份清单、绑定、所有权、逐映像记录和事务材料 |
+| `%ProgramData%/ClaudeDesktopFake/stage3/claude-auto` | 管理员保护的监控脚本快照、任务所有权、心跳和最近处理记录；关闭后保留文件但删除计划任务 |
 
 遇到 `Debugger`、已有 Verifier、路径过滤或外部值变化时停止覆盖。不要手工删除状态文件或把注册表值直接清零；先保留原始材料，再按 [troubleshooting.md](troubleshooting.md) 恢复。
 

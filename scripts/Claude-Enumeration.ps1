@@ -34,6 +34,11 @@ function Cdf-Enumeration($C,$Package) {
         PROGRAMDATA=[Environment]::GetFolderPath('CommonApplicationData')
         PROGRAMFILES=[Environment]::GetFolderPath('ProgramFiles')
     }
+    if($C.PSObject.Properties['FolderOverrides'] -and $C.FolderOverrides){
+        foreach($key in @('LOCALAPPDATA','APPDATA','USERPROFILE','PROGRAMDATA','PROGRAMFILES')){
+            if($C.FolderOverrides.PSObject.Properties[$key]){$folders[$key]=[IO.Path]::GetFullPath([string]$C.FolderOverrides.$key)}
+        }
+    }
     $directories=@();$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($template in $settings.imageDirectories){
         if($template -isnot [string] -or [string]::IsNullOrWhiteSpace($template)){throw 'imageDirectories entries must be non-empty strings.'}

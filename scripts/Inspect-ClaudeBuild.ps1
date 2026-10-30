@@ -17,7 +17,7 @@ foreach($name in @('CdfClaudeTimeZone64','CdfClaudeTimeZoneTest64')){
     $deps=@([regex]::Matches($imports,'(?im)^\s+([\w.-]+\.dll)\s*$')|ForEach-Object{$_.Groups[1].Value.ToLowerInvariant()}|Sort-Object -Unique)
     if($deps.Count -ne 1 -or $deps[0] -ne 'ntdll.dll'){throw "Unexpected dependency: $deps"}
     $exports=(& $dump /nologo /exports $file)-join "`n";if($LASTEXITCODE){throw 'Export inspection failed.'}
-    foreach($export in @('CdfClaudeQueryIdentityStatus','CdfTimeZoneQueryStatus','CdfLocaleQueryStatus')){if($exports -notmatch ('\b'+$export+'\b')){throw "Missing export $export"}}
+    foreach($export in @('CdfClaudeQueryIdentityStatus','CdfClaudeQueryStartupGuardStatus','CdfTimeZoneQueryStatus','CdfLocaleQueryStatus')){if($exports -notmatch ('\b'+$export+'\b')){throw "Missing export $export"}}
     $map=Get-Content -Raw -LiteralPath (Join-Path $BuildDirectory ('bin\'+$name+'.map'))
     $match=[regex]::Match($map,'(?m)^\s+[0-9a-f]+:[0-9a-f]+\s+CdfTimeZoneEntry\s+([0-9a-f]+)\s')
     if(-not $match.Success -or [Convert]::ToUInt64($match.Groups[1].Value,16) -ne $entry+$imageBase){throw 'Provider entry mismatch.'}
