@@ -32,6 +32,7 @@ function Cdf-Enumeration($C,$Package) {
         APPDATA=[Environment]::GetFolderPath('ApplicationData')
         USERPROFILE=[Environment]::GetFolderPath('UserProfile')
         PROGRAMDATA=[Environment]::GetFolderPath('CommonApplicationData')
+        PROGRAMFILES=[Environment]::GetFolderPath('ProgramFiles')
     }
     $directories=@();$seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($template in $settings.imageDirectories){

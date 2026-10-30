@@ -217,6 +217,19 @@ try{
     $resolved=Cdf-Enumeration $context $enumPackage
     Test-Check ($resolved.directories.Count -eq 2 -and $resolved.directories[1].path -ieq (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Claude-3p')) 'known-folder variables resolve the current user and duplicate roots are removed'
     Test-Check ((Cdf-PathInEnumeration (Join-Path $enumCache 'x.exe') @([pscustomobject]@{path=$enumCache})) -and -not(Cdf-PathInEnumeration ($enumCache+'-outside\x.exe') @([pscustomobject]@{path=$enumCache}))) 'directory matching respects path component boundaries'
+    $programFiles=Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsApps'
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%','%ProgramFiles%\WindowsApps','%programfiles%\WindowsApps\')})
+    $resolved=Cdf-Enumeration $context $enumPackage
+    Test-Check ($resolved.directories.Count -eq 2 -and $resolved.directories[1].path -ieq $programFiles) 'ProgramFiles resolves the x64 known folder and ignores variable case and duplicate trailing separators'
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%','%ProgramFiles%\WindowsApps',$programFiles)})
+    $resolved=Cdf-Enumeration $context $enumPackage
+    Test-Check ($resolved.directories.Count -eq 2) 'ProgramFiles and the matching absolute WindowsApps path share one enumeration root'
+    $savedProgramFiles=[Environment]::GetEnvironmentVariable('ProgramFiles','Process')
+    try{
+        [Environment]::SetEnvironmentVariable('ProgramFiles',(Join-Path $run 'spoofed-program-files'),'Process')
+        $resolved=Cdf-Enumeration $context $enumPackage
+        Test-Check ($resolved.directories[1].path -ieq $programFiles) 'ProgramFiles uses the Windows known folder rather than a process environment override'
+    }finally{[Environment]::SetEnvironmentVariable('ProgramFiles',$savedProgramFiles,'Process')}
     foreach($invalid in @(
         '{"schemaVersion":1,"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%"]}',
         '{"schemaVersion":2,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%"]}',

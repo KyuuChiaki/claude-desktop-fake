@@ -3,6 +3,7 @@
   "imageDirectories": [
     "%CLAUDE_PACKAGE_ROOT%",
     "%LOCALAPPDATA%\\Claude-3p",
-    "%LOCALAPPDATA%\\Packages"
+    "%LOCALAPPDATA%\\Packages",
+    "%ProgramFiles%\\WindowsApps"
   ]
 }

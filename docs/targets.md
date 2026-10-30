@@ -10,12 +10,17 @@
   "imageDirectories": [
     "%CLAUDE_PACKAGE_ROOT%",
     "%LOCALAPPDATA%\\Claude-3p",
-    "%LOCALAPPDATA%\\Packages"
+    "%LOCALAPPDATA%\\Packages",
+    "%ProgramFiles%\\WindowsApps"
   ]
 }
 ```
 
 工具递归枚举各目录中的 EXE。每个候选仍须通过有效 Authenticode、`Anthropic, PBC` 签名者、AMD64 架构和验签前后文件身份一致性检查。Store 主程序必须通过，其他候选不符合条件时跳过并报告。
+
+`%ProgramFiles%\WindowsApps` 覆盖默认 Store 安装目录，通常展开为 `C:\Program Files\WindowsApps`。可在同一次 Enable 中发现磁盘上并存的 Claude 版本，包括已下载但尚未成为当前用户注册版本的安装目录。`%CLAUDE_PACKAGE_ROOT%` 仍用于定位和校验当前注册主程序，必须保留。安装包位于其他盘符的独立应用库时，应在配置中加入实际安装根目录。
+
+新增目录只是扩大候选扫描范围。编辑配置或 Store 下载新版本后，仍需手动执行 Enable，将验签通过的具体文件身份写入清单；目录中的全部程序不会因此自动启用 Hook。现有 64 条已验证映像及 64 KiB 清单限制继续生效。
 
 ## 变量与路径
 
@@ -26,8 +31,9 @@
 | `%APPDATA%` | 当前用户的 ApplicationData 已知文件夹 |
 | `%USERPROFILE%` | 当前用户的 UserProfile 已知文件夹 |
 | `%PROGRAMDATA%` | CommonApplicationData 已知文件夹 |
+| `%ProgramFiles%` | 64 位管理进程的 ProgramFiles 已知文件夹，不使用 ProgramFiles (x86) |
 
-变量名称忽略大小写。用户目录通过 Windows 已知文件夹 API 取得，无需写入用户名，也不依赖拼接用户目录名称。应在安装 Store 包的同一用户会话中使用管理员终端；切换管理员账号会解析另一个用户的目录和包注册。
+变量名称忽略大小写。用户目录与 Program Files 通过 Windows 已知文件夹 API 取得，不信任进程环境变量的临时覆盖；无需写入用户名或系统盘盘符。应在安装 Store 包的同一用户会话中使用管理员、64 位终端；切换管理员账号会解析另一个用户的目录和包注册。
 
 允许使用明确的盘符绝对目录。JSON 中的反斜杠须写成 `\\`。不接受相对路径、UNC、通配符、整卷根目录或未知变量。配置上限 16 KiB、1 至 16 项；重复目录忽略大小写去重，必须保留 Store 包根目录。
 
