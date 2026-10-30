@@ -43,16 +43,56 @@ function Cdf-Enumeration($C,$Package) {
             if(-not $folders.ContainsKey($name) -or -not $folders[$name]){throw "Unknown or unavailable enumeration variable: $name"}
             return [string]$folders[$name]
         })
-        if($expanded -notmatch '^[A-Za-z]:[\\/]' -or $expanded -match '[*?"<>|\x00-\x1f]'){throw "Enumeration requires a drive-absolute directory without wildcards: $template"}
-        $full=[IO.Path]::GetFullPath($expanded).TrimEnd('\')
+        if($expanded -notmatch '^[A-Za-z]:[\\/]' -or $expanded -match '["<>|\x00-\x1f]'){throw "Enumeration requires a drive-absolute directory: $template"}
+        $expanded=$expanded.Replace('/','\');if($expanded.Length -gt 3){$expanded=$expanded.TrimEnd('\')};$folderPattern=$null
+        if($expanded -match '[*?]'){
+            $separator=$expanded.LastIndexOf('\')
+            $folderPattern=$expanded.Substring($separator+1)
+            $parent=$expanded.Substring(0,$separator+1)
+            if($parent -match '[*?]' -or $folderPattern -match '[\[\]`]'){
+                throw "Directory wildcards are limited to * and ? in the final folder name: $template"
+            }
+            $full=[IO.Path]::GetFullPath($parent).TrimEnd('\')
+        }else{$full=[IO.Path]::GetFullPath($expanded).TrimEnd('\')}
         if($full -ieq [IO.Path]::GetPathRoot($full).TrimEnd('\')){throw 'Enumeration of a drive root is not allowed.'}
         if([IO.File]::Exists($full)){throw "Enumeration entry is a file: $template"}
-        if($seen.Add($full)){$directories+=[pscustomobject]@{template=$template;path=$full;exists=[IO.Directory]::Exists($full)}}
+        $key=if($folderPattern){$full+'\'+$folderPattern}else{$full}
+        if($seen.Add($key)){$directories+=[pscustomobject]@{template=$template;path=$full;exists=[IO.Directory]::Exists($full);folderNamePattern=$folderPattern}}
     }
     if(-not $seen.Contains([IO.Path]::GetFullPath($Package.root).TrimEnd('\'))){throw 'imageDirectories must include %CLAUDE_PACKAGE_ROOT%.'}
     $sha=[Security.Cryptography.SHA256]::Create()
     try{$hash=[BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-','')}finally{$sha.Dispose()}
     [pscustomobject]@{configurationPath=$path;sha256=$hash;directories=$directories;legacy=$false}
+}
+function Cdf-ReadEnumerationDirectory([string]$Path) {
+    # Windows PowerShell 5.1 can report an existing path over MAX_PATH as
+    # missing. Use extended paths for filesystem access, then return ordinary
+    # DOS paths to signature verification and the provider identity manifest.
+    $literal=if($Path.StartsWith('\\?\',[StringComparison]::Ordinal)){$Path}else{'\\?\'+$Path}
+    $item=Get-Item -LiteralPath $literal -Force -ErrorAction Stop
+    if(-not $item.PSIsContainer){throw [IO.DirectoryNotFoundException]::new('Enumeration directory no longer exists: '+$Path)}
+    $entries=@()
+    if(-not($item.Attributes -band [IO.FileAttributes]::ReparsePoint)){
+        $entries=@(Get-ChildItem -LiteralPath $literal -Force -ErrorAction Stop)
+    }
+    [pscustomobject]@{attributes=$item.Attributes;entries=$entries}
+}
+function Cdf-IsMissingEnumerationDirectory($ErrorRecord) {
+    $exception=$ErrorRecord.Exception
+    while($exception){
+        if($exception -is [Management.Automation.ItemNotFoundException] -or
+           $exception -is [IO.DirectoryNotFoundException] -or $exception -is [IO.FileNotFoundException]){return $true}
+        if($exception -is [ComponentModel.Win32Exception]){return $exception.NativeErrorCode -in @(2,3)}
+        $exception=$exception.InnerException
+    }
+    return $false
+}
+function Cdf-EnumerationFolderPattern($Directory) {
+    if($Directory.PSObject.Properties['folderNamePattern']){return $Directory.folderNamePattern}
+    return $null
+}
+function Cdf-EnumerationFolderMatcher([string]$Pattern) {
+    [Management.Automation.WildcardPattern]::new($Pattern,([Management.Automation.WildcardOptions]::IgnoreCase -bor [Management.Automation.WildcardOptions]::CultureInvariant))
 }
 function Cdf-EnumeratedFiles($Enumeration,$Package) {
     if($Enumeration.legacy){return [pscustomobject]@{files=@($Package.files);skipped=@()}}
@@ -60,19 +100,31 @@ function Cdf-EnumeratedFiles($Enumeration,$Package) {
     $visited=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach($root in $Enumeration.directories){
         if(-not $root.exists){continue}
-        $pending=[Collections.Generic.Stack[string]]::new();$pending.Push($root.path)
+        $pending=[Collections.Generic.Stack[object]]::new()
+        $pending.Push([pscustomobject]@{path=$root.path;folderNamePattern=(Cdf-EnumerationFolderPattern $root)})
         while($pending.Count){
-            $directory=$pending.Pop()
-            if(-not $visited.Add($directory)){continue}
-            $item=Get-Item -LiteralPath $directory -Force -ErrorAction Stop
-            if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){$skipped.Add([pscustomobject]@{path=$directory;status='NotChecked';signer='';reason='reparse-directory'});continue}
-            foreach($entry in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)){
+            $frame=$pending.Pop();$directory=$frame.path;$folderPattern=$frame.folderNamePattern
+            if(-not $visited.Add($directory+'|'+$folderPattern)){continue}
+            try{$snapshot=Cdf-ReadEnumerationDirectory $directory}catch{
+                if(Cdf-IsMissingEnumerationDirectory $_){$skipped.Add([pscustomobject]@{path=$directory;status='NotChecked';signer='';reason='directory-disappeared'});continue}
+                throw
+            }
+            if($snapshot.attributes -band [IO.FileAttributes]::ReparsePoint){$skipped.Add([pscustomobject]@{path=$directory;status='NotChecked';signer='';reason='reparse-directory'});continue}
+            $matcher=if($folderPattern){Cdf-EnumerationFolderMatcher $folderPattern}else{$null};$matchedDirectories=0
+            foreach($entry in $snapshot.entries){
+                $entryPath=$entry.FullName
+                if($entryPath.StartsWith('\\?\',[StringComparison]::Ordinal)){$entryPath=$entryPath.Substring(4)}
+                if($matcher){
+                    if(-not $entry.PSIsContainer -or -not $matcher.IsMatch($entry.Name)){continue}
+                    $matchedDirectories++
+                }
                 if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){
-                    if($entry.PSIsContainer -or $entry.Extension -ieq '.exe'){$skipped.Add([pscustomobject]@{path=$entry.FullName;status='NotChecked';signer='';reason='reparse-entry'})}
+                    if($entry.PSIsContainer -or $entry.Extension -ieq '.exe'){$skipped.Add([pscustomobject]@{path=$entryPath;status='NotChecked';signer='';reason='reparse-entry'})}
                     continue
                 }
-                if($entry.PSIsContainer){$pending.Push($entry.FullName)}elseif($entry.Extension -ieq '.exe'){$files.Add($entry.FullName)}
+                if($entry.PSIsContainer){$pending.Push([pscustomobject]@{path=$entryPath;folderNamePattern=$null})}elseif($entry.Extension -ieq '.exe'){$files.Add($entryPath)}
             }
+            if($matcher -and -not $matchedDirectories){$skipped.Add([pscustomobject]@{path=($directory+'\'+$folderPattern);status='NotChecked';signer='';reason='folder-pattern-no-match'})}
         }
     }
     [pscustomobject]@{files=@($files.ToArray()|Sort-Object -Unique);skipped=@($skipped.ToArray())}
@@ -80,7 +132,12 @@ function Cdf-EnumeratedFiles($Enumeration,$Package) {
 function Cdf-PathInEnumeration([string]$Path,$Directories) {
     if(-not $Path){return $false}
     foreach($directory in $Directories){
-        if($Path.StartsWith(($directory.path.TrimEnd('\')+'\'),[StringComparison]::OrdinalIgnoreCase)){return $true}
+        $prefix=$directory.path.TrimEnd('\')+'\'
+        if(-not $Path.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){continue}
+        $pattern=Cdf-EnumerationFolderPattern $directory
+        if(-not $pattern){return $true}
+        $relative=$Path.Substring($prefix.Length);$separator=$relative.IndexOf('\')
+        if($separator -gt 0 -and (Cdf-EnumerationFolderMatcher $pattern).IsMatch($relative.Substring(0,$separator))){return $true}
     }
     return $false
 }

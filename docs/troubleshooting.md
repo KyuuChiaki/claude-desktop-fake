@@ -15,6 +15,8 @@
 | `enumeration.changed`／`refreshRequired` | 查看展开目录和配置错误；配置有效后重新 Enable，不手工改身份清单 |
 | 签名不符合 | 查看 Valid 状态和签名者；主程序不符合会整批拒绝，不应关闭身份检查 |
 | Access denied／注册拒绝 | 使用管理员 x64 PowerShell，检查已有调试／Verifier／过滤配置和安全产品事件记录；工具不自动停用系统防护 |
+| PowerShell 5.1 报长目录不存在 | 更新枚举脚本；扩展路径访问已兼容超过 MAX_PATH 的目录，无需修改系统长路径策略。真正消失的临时目录会记录 `directory-disappeared`，权限错误仍会中止 |
+| WindowsApps 扫描过慢 | 将目录改为 `%ProgramFiles%\\WindowsApps\\AnthropicPBC.Claude_*`，不要同时保留无筛选的父目录规则；匹配后仍需逐文件验签 |
 | `catalogue-build-mismatch` | JSON 与解析器不是同一构建，重新构建并保持 DLL、解析器和档案一致 |
 | `unsupported-windows-build` | 当前运行时分支只支持 build 19045 |
 | `missing-site`／`ambiguous-site`／`abi-mismatch` | 不满足已验证 ABI，保留兼容报告，不能仅添加版本号或短序言放行 |

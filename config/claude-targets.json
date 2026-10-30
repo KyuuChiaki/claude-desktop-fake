@@ -4,6 +4,6 @@
     "%CLAUDE_PACKAGE_ROOT%",
     "%LOCALAPPDATA%\\Claude-3p",
     "%LOCALAPPDATA%\\Packages",
-    "%ProgramFiles%\\WindowsApps"
+    "%ProgramFiles%\\WindowsApps\\AnthropicPBC.Claude_*"
   ]
 }

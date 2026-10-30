@@ -44,7 +44,7 @@ IFEO 按 EXE 文件名触发，同名其他程序也会加载门控 DLL。Provid
 
 ## EXE 枚举目录
 
-[config/claude-targets.json](../config/claude-targets.json) 默认枚举 `%CLAUDE_PACKAGE_ROOT%`、`%LOCALAPPDATA%\Claude-3p`、`%LOCALAPPDATA%\Packages` 和 `%ProgramFiles%\WindowsApps`，覆盖 Store 重定向缓存中的 Code 及并存的 Claude 安装版本。路径从 Windows 已知文件夹动态解析，默认 WindowsApps 之外的安装位置需单独加入。可以修改目录列表；Store 主程序仍为必需目标，所有候选仍需有效的 `Anthropic, PBC` 签名和文件身份检查。
+[config/claude-targets.json](../config/claude-targets.json) 默认枚举 `%CLAUDE_PACKAGE_ROOT%`、`%LOCALAPPDATA%\Claude-3p`、`%LOCALAPPDATA%\Packages` 和 `%ProgramFiles%\WindowsApps\AnthropicPBC.Claude_*`，覆盖 Store 重定向缓存中的 Code 及并存的 Claude 安装版本。WindowsApps 先按一级目录名匹配再递归，不进入无关应用目录。路径从 Windows 已知文件夹动态解析，其他应用库需单独加入。Store 主程序仍为必需目标，所有候选仍需有效的 `Anthropic, PBC` 签名和文件身份检查。
 
 修改后执行 Enable 刷新身份清单，Status 的 `enumeration` 显示实际路径、哈希和是否待应用。已运行进程保留原快照。目录配置、增删与 Code 覆盖边界见 [targets.md](targets.md)。
 

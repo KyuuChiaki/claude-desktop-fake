@@ -80,7 +80,7 @@ Disable 恢复 IFEO，但不卸载已运行进程中的 DLL；进程退出后恢
 
 Claude 更新后重新执行 `Enable`。工具从当前用户的 Store 注册发现路径，重新检查有效 Authenticode 签名、`Anthropic, PBC` 签名者和具体文件身份，再进行离线兼容解析。
 
-EXE 枚举目录由 [config/claude-targets.json](config/claude-targets.json) 配置，默认包含动态发现的 Store 包、当前用户的 `%LOCALAPPDATA%\Claude-3p`、`%LOCALAPPDATA%\Packages` 和 `%ProgramFiles%\WindowsApps`，覆盖 Desktop 下载的 Claude Code、Store 重定向缓存及磁盘上并存的 Claude 安装版本。目录变量无需写入用户名或系统盘盘符。每个文件仍须独立验签和登记，修改目录或下载新版本后重新 Enable；详见 [枚举目录](docs/targets.md)。
+EXE 枚举目录由 [config/claude-targets.json](config/claude-targets.json) 配置，默认包含动态发现的 Store 包、当前用户的 `%LOCALAPPDATA%\Claude-3p`、`%LOCALAPPDATA%\Packages` 和 `%ProgramFiles%\WindowsApps\AnthropicPBC.Claude_*`，覆盖 Desktop 下载的 Claude Code、Store 重定向缓存及并存的 Claude 安装版本。WindowsApps 只进入名称匹配的目录，目录模式不固定架构或发布者 ID 后缀。目录变量无需写入用户名或系统盘盘符。每个文件仍须独立验签和登记，修改目录或下载新版本后重新 Enable；详见 [枚举目录](docs/targets.md)。
 
 完整映像命中、同运行时重打包或已验证 ABI 自动解析均会生成绑定。定位不唯一、ABI 改变或证据不足时拒绝适配。默认 block 会在启用前拒绝不支持的目标；启动复核失败按配置阻止或整套透传。身份不匹配的同名程序保持透传。
 

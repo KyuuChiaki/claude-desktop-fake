@@ -217,6 +217,41 @@ try{
     $resolved=Cdf-Enumeration $context $enumPackage
     Test-Check ($resolved.directories.Count -eq 2 -and $resolved.directories[1].path -ieq (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Claude-3p')) 'known-folder variables resolve the current user and duplicate roots are removed'
     Test-Check ((Cdf-PathInEnumeration (Join-Path $enumCache 'x.exe') @([pscustomobject]@{path=$enumCache})) -and -not(Cdf-PathInEnumeration ($enumCache+'-outside\x.exe') @([pscustomobject]@{path=$enumCache}))) 'directory matching respects path component boundaries'
+    $longRoot=Join-Path $run 'long-enumeration';$longDirectory=$longRoot
+    while($longDirectory.Length -lt 280){$longDirectory=Join-Path $longDirectory 'long-directory-component-0123456789'}
+    [IO.Directory]::CreateDirectory($longDirectory)|Out-Null
+    $longFile=Join-Path $longDirectory 'candidate.exe';[IO.File]::WriteAllBytes($longFile,[byte[]](77,90))
+    $longEnumeration=[pscustomobject]@{legacy=$false;directories=@([pscustomobject]@{path=$longRoot;exists=$true})}
+    $longResult=Cdf-EnumeratedFiles $longEnumeration $enumPackage
+    Test-Check ($longFile.Length -gt 260 -and @($longResult.files).Count -eq 1 -and $longResult.files[0] -ceq $longFile) 'long directories enumerate candidates without persisting extended-path prefixes'
+    $legacyShell=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
+    $legacyRead=& $legacyShell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) 'tests\enumeration_probe.ps1') -Project (Split-Path -Parent $PSScriptRoot) -Root $longRoot -ExpectedFile $longFile
+    $legacyExit=$LASTEXITCODE;$legacyResult=($legacyRead -join "`n")|ConvertFrom-Json
+    Test-Check ($legacyExit -eq 0 -and $legacyResult.passed) 'Windows PowerShell 5.1 traverses over-MAX_PATH directories without changing system long-path policy'
+    $goneRoot=Join-Path $run 'disappearing-directory';$goneChild=Join-Path $goneRoot 'queued-child'
+    [IO.Directory]::CreateDirectory($goneChild)|Out-Null
+    $goneEnumeration=[pscustomobject]@{legacy=$false;directories=@([pscustomobject]@{path=$goneRoot;exists=$true})}
+    $originalReader=${function:Cdf-ReadEnumerationDirectory}
+    try{
+        Set-Item -LiteralPath Function:Cdf-ReadEnumerationDirectory -Value {
+            param([string]$Path)
+            if($Path -ceq $goneChild -and [IO.Directory]::Exists($goneChild)){[IO.Directory]::Delete($goneChild,$false)}
+            & $originalReader $Path
+        }
+        $goneResult=Cdf-EnumeratedFiles $goneEnumeration $enumPackage
+        Test-Check (@($goneResult.skipped|Where-Object reason -eq 'directory-disappeared').Count -eq 1 -and @($goneResult.files).Count -eq 0) 'a queued directory deleted during traversal is reported and does not abort enumeration'
+        Set-Item -LiteralPath Function:Cdf-ReadEnumerationDirectory -Value {param([string]$Path)throw [UnauthorizedAccessException]::new('fixture directory access denied')}
+        Test-Reject {Cdf-EnumeratedFiles $goneEnumeration $enumPackage} '*fixture directory access denied*' 'directory access denial remains a fatal enumeration error'
+    }finally{Set-Item -LiteralPath Function:Cdf-ReadEnumerationDirectory -Value $originalReader}
+    $missingRoot=Join-Path $run 'already-missing-directory'
+    $missingEnumeration=[pscustomobject]@{legacy=$false;directories=@([pscustomobject]@{path=$missingRoot;exists=$true})}
+    $missingResult=Cdf-EnumeratedFiles $missingEnumeration $enumPackage
+    Test-Check (@($missingResult.skipped|Where-Object reason -eq 'directory-disappeared').Count -eq 1) 'an optional root removed after its existence check is reported explicitly'
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%')})
+    try{
+        Set-Item -LiteralPath Function:Cdf-ReadEnumerationDirectory -Value {param([string]$Path)throw [IO.DirectoryNotFoundException]::new('fixture Store root disappeared')}
+        Test-Reject {Cdf-DiscoverImages $context} '*Claude main image was not found*' 'a missing required Store main still rejects discovery'
+    }finally{Set-Item -LiteralPath Function:Cdf-ReadEnumerationDirectory -Value $originalReader}
     $programFiles=Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsApps'
     Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%','%ProgramFiles%\WindowsApps','%programfiles%\WindowsApps\')})
     $resolved=Cdf-Enumeration $context $enumPackage
@@ -230,6 +265,46 @@ try{
         $resolved=Cdf-Enumeration $context $enumPackage
         Test-Check ($resolved.directories[1].path -ieq $programFiles) 'ProgramFiles uses the Windows known folder rather than a process environment override'
     }finally{[Environment]::SetEnvironmentVariable('ProgramFiles',$savedProgramFiles,'Process')}
+    $patternRoot=Join-Path $run 'store-installations'
+    $patternOne=Join-Path $patternRoot 'AnthropicPBC.Claude_3.0_x64__old-publisher'
+    $patternTwo=Join-Path $patternRoot 'anthropicpbc.claude_4.29_arm64__new-publisher'
+    $unrelated=Join-Path $patternRoot 'Unrelated.OtherApp_1.0_x64__publisher'
+    foreach($directory in @((Join-Path $patternOne 'app'),(Join-Path $patternTwo 'app'),$unrelated)){
+        [IO.Directory]::CreateDirectory($directory)|Out-Null
+    }
+    $patternFileOne=Join-Path $patternOne 'app\one.exe';$patternFileTwo=Join-Path $patternTwo 'app\two.exe'
+    foreach($file in @($patternFileOne,$patternFileTwo,(Join-Path $unrelated 'excluded.exe'),(Join-Path $patternRoot 'AnthropicPBC.Claude_not-a-directory.exe'))){[IO.File]::WriteAllBytes($file,[byte[]](77,90))}
+    $patternTemplate=$patternRoot+'\AnthropicPBC.Claude_*'
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%',$patternTemplate,($patternRoot+'\anthropicpbc.claude_*\'))})
+    $filtered=Cdf-Enumeration $context $enumPackage
+    Test-Check ($filtered.directories.Count -eq 2 -and $filtered.directories[1].path -ceq $patternRoot -and $filtered.directories[1].folderNamePattern -ceq 'AnthropicPBC.Claude_*') 'a final-folder pattern preserves its parent and removes duplicate case-insensitive rules'
+    try{
+        Set-Item -LiteralPath Function:Cdf-ReadEnumerationDirectory -Value {
+            param([string]$Path)
+            if($Path -ceq $unrelated){throw [UnauthorizedAccessException]::new('unrelated package must never be entered')}
+            & $originalReader $Path
+        }
+        $filteredFiles=Cdf-EnumeratedFiles $filtered $enumPackage
+        Test-Check (@($filteredFiles.files).Count -eq 3 -and $patternFileOne -in $filteredFiles.files -and $patternFileTwo -in $filteredFiles.files) 'folder matching recurses into all Claude versions without fixing architecture or publisher suffixes'
+        Test-Check ((Join-Path $unrelated 'excluded.exe') -notin $filteredFiles.files -and (Join-Path $patternRoot 'AnthropicPBC.Claude_not-a-directory.exe') -notin $filteredFiles.files) 'unmatched packages and files in the pattern parent are not traversed as package directories'
+    }finally{Set-Item -LiteralPath Function:Cdf-ReadEnumerationDirectory -Value $originalReader}
+    Test-Check ((Cdf-PathInEnumeration $patternFileOne $filtered.directories) -and (Cdf-PathInEnumeration $patternFileTwo $filtered.directories)) 'Status uses the same case-insensitive folder pattern as enumeration'
+    Test-Check (-not(Cdf-PathInEnumeration (Join-Path $unrelated 'excluded.exe') $filtered.directories) -and -not(Cdf-PathInEnumeration (Join-Path $patternRoot 'AnthropicPBC.Claude_not-a-directory.exe') $filtered.directories)) 'Status excludes unrelated packages and parent-level executables from filtered scope'
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%',($patternRoot+'\NoMatchingPackage_*'))})
+    $emptyPattern=Cdf-Enumeration $context $enumPackage;$emptyFiles=Cdf-EnumeratedFiles $emptyPattern $enumPackage
+    Test-Check (@($emptyFiles.files).Count -eq 1 -and @($emptyFiles.skipped|Where-Object reason -eq 'folder-pattern-no-match').Count -eq 1) 'an optional folder pattern with no matches is reported and preserves the required Store root'
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%',($patternRoot+'\AnthropicPBC.Claude_?'))})
+    $questionPattern=Cdf-Enumeration $context $enumPackage
+    Test-Check ((Cdf-PathInEnumeration (Join-Path $patternRoot 'AnthropicPBC.Claude_A\app\test.exe') $questionPattern.directories) -and -not(Cdf-PathInEnumeration (Join-Path $patternRoot 'AnthropicPBC.Claude_AB\app\test.exe') $questionPattern.directories)) 'question-mark matching is limited to one character in one folder name'
+    Cdf-Save $enumConfig ([ordered]@{schemaVersion=1;imageDirectories=@('%CLAUDE_PACKAGE_ROOT%',($patternRoot+'\AnthropicPBC.Claude_*'),($patternRoot+'\AnthropicPBC.Claude_4*'))})
+    $overlapping=Cdf-Enumeration $context $enumPackage;$overlappingFiles=Cdf-EnumeratedFiles $overlapping $enumPackage
+    Test-Check (@($overlappingFiles.files).Count -eq 3) 'overlapping folder rules do not duplicate executable candidates'
+    $patternLink=Join-Path $patternRoot 'AnthropicPBC.Claude_link'
+    New-Item -ItemType Junction -Path $patternLink -Target $unrelated|Out-Null
+    try{
+        $linkedFiles=Cdf-EnumeratedFiles $filtered $enumPackage
+        Test-Check (@($linkedFiles.files).Count -eq 3 -and @($linkedFiles.skipped|Where-Object reason -eq 'reparse-entry').Count -eq 1) 'a name-matched directory junction is reported without following it'
+    }finally{[IO.Directory]::Delete($patternLink,$false)}
     foreach($invalid in @(
         '{"schemaVersion":1,"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%"]}',
         '{"schemaVersion":2,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%"]}',
@@ -239,6 +314,8 @@ try{
         '{"schemaVersion":1,"imageDirectories":["relative-folder"]}',
         '{"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%","C:\\"]}',
         '{"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%","C:\\wildcard*"]}',
+        '{"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%","%ProgramFiles%\\Windows*\\AnthropicPBC.Claude_*"]}',
+        '{"schemaVersion":1,"imageDirectories":["%CLAUDE_PACKAGE_ROOT%","%ProgramFiles%\\WindowsApps\\Anthropic[AB]*"]}',
         '{"schemaVersion":1,"imageDirectories":[]}',
         '{"schemaVersion":1,"imageDirectories":["%LOCALAPPDATA%\\Claude-3p"]}'
     )){
