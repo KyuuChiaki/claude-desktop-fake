@@ -1,0 +1,3 @@
+EXPORTS
+    ShellExecuteW=FixtureShellExecuteW
+    ShellExecuteExW=FixtureShellExecuteExW

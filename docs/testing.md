@@ -8,9 +8,11 @@
 .\scripts\Test.ps1
 ```
 
-默认 Unit 套件的 9 项测试不安装 Provider、不修改 IFEO，检查配置／规则、时间语义预览、AMD64、入口、导出、静态依赖和源码约束。脚本从构建缓存发现 CTest，不要求它在 PATH。
+默认 Unit 套件的 10 项测试在无需安装 Provider 的条件下运行，覆盖配置与规则、时间语义预览、AMD64、入口和导出、静态依赖、源码约束以及浏览器确认窗。脚本从构建缓存发现 CTest。
 
 `time_config_preview` 覆盖 schema 1／2／3、洛杉矶冬夏令时及两次切换边界、UTC 时钟正负偏移跨越 DST、纽约、印度半小时、跨日／闰日、禁用、无效时间输入和文件只读契约。它同时验证 `0` 不改变 UTC、时区偏移单独应用，且省略必填 `utcOffsetSeconds` 会失败。
+
+`browser_consent` 在独立的 Windows 桌面验证普通和延迟调用、完整 URL、窄屏和低可用高度、置顶、确认后的系统错误以及拒绝后取消。测试使用替身 Shell，不打开浏览器。非交互环境仅验证无法显示确认窗时返回错误的路径。
 
 ## 完整集成测试
 
@@ -45,12 +47,13 @@ try {
 
 构建继续使用 16 线程；注册及共享配置测试通过 `RUN_SERIAL` 串行。六组配置、两种名称的重复启动、各进程上下文及完整文件复核会耗时较长。
 
-## 20 项 CTest
+## 21 项 CTest
 
 | 分组 | 用例 |
 |---|---|
 | 规则 | `time_rules`、`time_config_preview`、`locale_rules`、`runtime_rules`、`runtime_compatibility_rules` |
 | 构建 | `build_inspection`、`timezone_build_inspection`、`locale_build_inspection`、`claude_gate_build_inspection`、`runtime_build_inspection` |
+| 浏览器确认 | `browser_consent` |
 | 加载／恢复 | `verifier_load_integration`、`configuration_safety`、`timezone_configuration_safety` |
 | 功能 | `timezone_integration`、`locale_integration`、`claude_gate_integration`、`runtime_integration`、`runtime_cross_version`、`runtime_safety` |
 | 自动监控 | `claude_auto_monitor`：文件事件、进程终止条件及临时 SYSTEM 开机任务生命周期 |

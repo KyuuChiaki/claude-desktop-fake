@@ -5,6 +5,7 @@
 #include "runtime_provider.h"
 #if defined(CDF_CLAUDE_IDENTITY_REQUIRED)
 #include "claude_identity.h"
+#include "browser_consent.h"
 #endif
 #include <intrin.h>
 
@@ -251,9 +252,14 @@ BOOL WINAPI HookLocalSystemTimeToLocalFileTime(const TIME_ZONE_INFORMATION* expl
 extern cdf::verifier::ThunkDescriptor native_thunks[];
 extern cdf::verifier::ThunkDescriptor kernel_thunks[];
 PVOID RedirectTimeAddress(PVOID address) {
-    // Verifier rewrites imports, but this Windows build returns raw export
-    // addresses from dynamic lookup. Only redirect our known time targets.
+    // Delay-load helpers also use dynamic lookup, which can return raw exports.
     if (!address) return address;
+#if defined(CDF_CLAUDE_IDENTITY_REQUIRED)
+    if (identity_matched) {
+        const auto redirect = cdf::browser_consent::RedirectShellOpenAddress(address);
+        if (redirect != address) return redirect;
+    }
+#endif
     cdf::verifier::ThunkDescriptor* tables[]={native_thunks,base_thunks,kernel_thunks};
     for (auto* table:tables) for (auto* p=table;p->name;++p)
         if (p->old_address && address==p->old_address) return p->new_address;
@@ -323,8 +329,17 @@ cdf::verifier::DllDescriptor dlls[] = {
     {const_cast<PWSTR>(L"ntdll.dll"), 0, nullptr, native_thunks},
     {const_cast<PWSTR>(L"kernelbase.dll"), 0, nullptr, base_thunks},
     {const_cast<PWSTR>(L"kernel32.dll"), 0, nullptr, kernel_thunks},
+#if defined(CDF_CLAUDE_IDENTITY_REQUIRED)
+    {const_cast<PWSTR>(L"shell32.dll"), 0, nullptr, cdf::browser_consent::shell},
+#endif
     {const_cast<PWSTR>(L"combase.dll"), 0, nullptr, nullptr},
     {}};
+#if defined(CDF_CLAUDE_IDENTITY_REQUIRED)
+cdf::verifier::DllDescriptor browser_only[] = {
+    {const_cast<PWSTR>(L"kernelbase.dll"), 0, nullptr, base_thunks+base_time_count},
+    {const_cast<PWSTR>(L"kernel32.dll"), 0, nullptr, kernel_thunks},
+    {const_cast<PWSTR>(L"shell32.dll"), 0, nullptr, cdf::browser_consent::shell}, {}};
+#endif
 template<class Fn> Fn Original(CdfTimeHook hook) {
     const ULONG index = hook <= CdfGetTimeZoneInformationForYear ? hook : hook - CdfSystemTimeToTzSpecificLocalTime + CdfGetTimeZoneInformationForYear+1;
     return reinterpret_cast<Fn>(base_thunks[index].old_address);
@@ -348,7 +363,8 @@ void Initialize() {
     if (cdf::LocalePrepared()) cdf::AppendLocaleThunks(base_thunks+base_time_count+1,kernel_thunks+1,native_thunks+native_time_count+3);
     cdf::PrepareRuntime(config,parsed,active);
     if(cdf::RuntimePrepared())cdf::AppendRuntimeThunks(base_thunks,kernel_thunks,native_thunks);
-    if(cdf::RuntimePrepared())dlls[3].thunks=cdf::RuntimeComThunks();else dlls[3].name=nullptr;
+    auto& com = dlls[sizeof(dlls)/sizeof(dlls[0])-2];
+    if(cdf::RuntimePrepared())com.thunks=cdf::RuntimeComThunks();else com.name=nullptr;
     if (active || cdf::LocalePrepared()
         ||cdf::RuntimePrepared()
         ) provider.dlls=dlls;
@@ -380,7 +396,10 @@ extern "C" BOOL WINAPI CdfTimeZoneEntry(HINSTANCE, DWORD reason, LPVOID reserved
 #if defined(CDF_CLAUDE_IDENTITY_REQUIRED)
         identity_matched=cdf::claude::MatchesCurrentImage();
         if(!identity_matched&&cdf::claude::BlockUnverifiedImage())return FALSE;
-        if (identity_matched) Initialize();
+        if (identity_matched) {
+            Initialize();
+            if (provider.dlls == empty_dlls) provider.dlls = browser_only;
+        }
 #else
         Initialize();
 #endif

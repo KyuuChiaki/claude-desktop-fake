@@ -34,6 +34,24 @@ IFEO 仅影响之后启动的进程。Disable 不会卸载已运行进程中的 
 
 升级本项目 DLL 时先用原构建执行 `Disable`，再构建或替换 DLL，最后 `Enable`。有受管理映像时，工具拒绝替换共享 Provider。确认旧进程已退出后再替换被占用的文件。
 
+## 打开默认浏览器前询问
+
+此功能默认关闭。部署新版 Provider 后，在使用 Claude 的 Windows 账户下运行以下命令开启确认窗。
+
+```powershell
+$preferences = 'HKCU:\Software\ClaudeDesktopFake\Preferences'
+if (-not (Test-Path -LiteralPath $preferences)) {
+    New-Item -Path $preferences -Force | Out-Null
+}
+New-ItemProperty -LiteralPath $preferences -Name ConfirmBrowserLinks -PropertyType DWord -Value 1 -Force
+```
+
+将 `ConfirmBrowserLinks` 设为 DWORD `0` 即可关闭。已加载新版的进程在下次打开链接时读取设置。
+
+已通过身份核验的进程使用 Windows Shell 打开 HTTP 或 HTTPS 链接时，确认窗显示可滚动和复制的完整地址。确认窗在打开时按显示器可用区域居中，空间不足时等比缩小，并保持在普通窗口上方。
+
+点击「确认」批准本次打开。点击「拒绝」、按 Esc 或关闭确认窗会取消打开并将请求标记为已处理，避免因这次取消弹出「无法打开链接」。确认后实际发生的系统错误仍会返回。
+
 ## 身份边界
 
 当前目标为包 `AnthropicPBC.Claude`、家族 `AnthropicPBC.Claude_fnn82j28hfe8t`、x64 应用入口。EXE 必须有有效 Authenticode 签名，签名者 SimpleName 与 `Anthropic, PBC` 忽略大小写完全相同。主程序不符合则整批拒绝；其他不符合项显示为跳过。证书指纹不固定，以允许正常证书轮换。

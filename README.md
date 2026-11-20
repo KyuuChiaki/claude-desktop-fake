@@ -91,7 +91,7 @@ Provider 自身升级先 `Disable`，再替换构建并 `Enable`。不强行覆�
 | 文档 | 内容 |
 |---|---|
 | [构建](docs/build.md) | 环境、自动发现、工具覆盖、产物和生成器 |
-| [使用](docs/usage.md) | 首次部署、启停、更新、通用 Probe、诊断和恢复 |
+| [使用](docs/usage.md) | 首次部署、启停、更新、浏览器外链确认、通用 Probe、诊断和恢复 |
 | [配置](docs/configuration.md) | 时间、区域、语言、地理区域与失败策略 |
 | [枚举目录](docs/targets.md) | JSON 目录列表、用户变量、Code 缓存、身份刷新与状态 |
 | [开机监控](docs/automatic-refresh.md) | Enable／Disable 绑定、自动验签、启动门控、进程处理与故障恢复 |
