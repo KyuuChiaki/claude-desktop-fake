@@ -1,51 +1,97 @@
-# 自动刷新、开机任务与启动门控
+# 自动刷新与启动诊断
 
-自动监控包含在原有启停接口中，不需要另行设置开机项。在管理员、64 位 PowerShell 的仓库根目录执行：
+[返回文档索引](README.md)
+
+自动刷新状态与启动观测在现行管理脚本中独立报告。前者显示所管任务、刷新结果和注册事务。后者记录 Windows 创建进程后，文件身份何时可以核实。
+
+## 查看后台状态
 
 ```powershell
-.\scripts\Manage-Claude.ps1 -Action Enable
-.\scripts\Manage-Claude.ps1 -Action Status
-.\scripts\Manage-Claude.ps1 -Action Disable
+$status = .\scripts\Manage-ClaudeAuto.ps1 -Action Status | ConvertFrom-Json
+$status | Select-Object configured, enabled, taskPresent, startsAtBoot, monitorRunning, pending, error
 ```
 
-## 开启与关闭
+`Manage-Claude.ps1 -Action Status` 也在 `automaticRefresh` 下返回这些字段。
 
-`Enable` 验签并登记当前目标，同时部署启动门控和一份不可变的监控发布快照。计划任务名为 `ClaudeDesktopFake-AutoRefresh-<用户SID>`，以 LocalSystem 身份隐藏运行，具有开机延迟五秒及目标用户登录两个触发器。安装完成立即启动，无需等待重启。任务允许电池供电、不设运行时限、忽略重复实例，失败后最多重试三次。监控使用安装时保存的目标用户已知文件夹，避免 SYSTEM 的 `%LOCALAPPDATA%` 被误当成你的用户目录。
+| 字段 | 含义 |
+| --- | --- |
+| `configured`、`enabled`、`taskPresent` | 是否有管理记录、是否激活有效任务、是否存在对应计划任务 |
+| `monitorRunning` | 计划任务正在运行，近 30 秒内有有效心跳，进程身份核对通过 |
+| `startsAtBoot` | 所有权核对通过的任务配置可随开机启动。重启实测以独立记录为准 |
+| `health` | 最近刷新、进程事件订阅、失败原因与后台处理 |
+| `pending`、`error` | 未完成的安装事务以及验证错误 |
+| `startupObservation` | 启动观测健康、预验签统计和最近的身份判定 |
 
-`Disable` 先把监控状态置为关闭，取消后续刷新并停止自己的观察任务，然后等待已创建的刷新子进程完成或取消事务，再删除计划任务。随后恢复 IFEO 和启动门控值的原始数据、类型及存在状态。跨 SYSTEM／管理员的注册锁显式授予两者权限；不在写注册表时强行结束刷新子进程。最多等待三分钟，超时保留 IFEO 和恢复材料并报告，之后可以重试。关闭成功后后台不会再次自动开启 Hook。任务定义被外部修改时停止操作并保留恢复材料，不删除来源不明的任务。
+正式后台从 `%ProgramData%\ClaudeDesktopFake\stage3\claude-auto` 中有所有权记录的发布快照运行。任务使用安装时保存的目标用户已知文件夹，并以 LocalSystem 运行。更新工作树后，可从状态核对后台仍在使用哪份发布快照。`Enable` 和 `Disable` 的完整生命周期包含该任务。[文件身份与事务](Stage4-Claude.md)
 
-监控脚本和恢复材料保留在 `%ProgramData%\ClaudeDesktopFake\stage3\claude-auto`。该目录只允许管理员和 SYSTEM 写入；普通用户可读。任务从这里运行，不依赖开发盘在开机时可用。仓库脚本、配置或 Provider 升级后，先 `Disable`、构建，再 `Enable` 更新发布快照。不会改写已部署的时间／区域 JSON。
+## 新 EXE 的启动身份诊断
 
-## 文件与进程处理
+独立线程接收 `Win32_ProcessStartTrace`，并记录 Windows 提供的创建时间。另一线程在所配置目录中新 EXE 写完或改名后进行 Authenticode 预验签。全机补扫、整包刷新或读取更新目录时，启动诊断仍可独立处理到达的事件。
 
-- 按 `claude-targets.json` 监控目录和文件名模式；新 EXE、替换、重命名及新版本目录都会触发去抖刷新。事件丢失会安排复核，另有每五分钟完整扫描。
-- 每次登记都重新验签并核对文件身份；只接纳有效 Authenticode 且 SimpleName 为 `Anthropic, PBC` 的 x64 EXE，运行时扩展仍须通过兼容分析。签名者名称忽略大小写，证书指纹不固定。
-- 订阅 `Win32_ProcessStartTrace` 并每十五秒补扫运行进程；文件注册在单独的刷新工作进程执行，长时间验签不会暂停进程监控。
-- 已确认有效 Anthropic 签名但未登记的运行进程会被终止，路径随后进入待重新验签的候选列表。登记有效但 Provider 缺失的目标在两秒初始化宽限后终止。诊断可读取时还会核对 Provider 的身份门控结果。
-- 进程终止使用保留的进程句柄，避免 PID 复用导致误杀。签名无效、其他签名者、无法验签或无法可靠查询的进程不会按猜测终止；此限制必须结合监控状态和错误排查。
-- 不自动重新启动被终止的应用或服务，也不主动重启现有 Claude／SYSTEM 服务。登记完成后由用户再次启动。
+有效签名在内存中保留两分钟。命中前复核路径、卷序列号、File ID、大小、最后写入时间和 NTFS 更改时间。文件仍有写入者、磁盘内容在进程创建后才变化、进程已经退出或 PID 已复用时，诊断给出对应的待核实分类。溢出和目录变化会触发补扫。缓存未命中时可在启动路径验签，并用当前身份清单检查登记状态。
+
+```powershell
+$status = .\scripts\Manage-ClaudeAuto.ps1 -Action Status | ConvertFrom-Json
+$status.startupObservation | Select-Object ready, stale, hosting
+$status.startupObservation.processStarts.recent |
+    Select-Object image, pid, signature, registration, source, creationToReceiptMs, creationToVerdictMs, withinThreeSeconds
+```
+
+| 字段或值 | 含义 |
+| --- | --- |
+| `ready`、`stale` | 观察组件是否就绪，以及最近状态是否超过 5 秒未更新 |
+| `hosting=monitor` | 已部署后台自身托管观察组件 |
+| `hosting=current-monitor-session` | 临时组件跟随旧版后台的当前进程，后台退出、切换发布版或设备重启时结束 |
+| `preverified` | 文件在进程启动前已验签，启动时复核通过 |
+| `startup-verification`、`startup-cache` | 启动路径验签，或复用之前核实过的同一文件 |
+| `registered`、`unlisted`、`file-changed` | 匹配当前登记、清单中没有该文件、同一路径已有其他文件记录 |
+| `manifest-unavailable`、`changed-since-start` | 清单无法读取，或磁盘文件更改晚于进程创建 |
+| `creationToReceiptMs`、`creationToVerdictMs` | 从进程创建到收到事件、到完成判定的毫秒数 |
+| `exitedBeforeInspection`、`reusedPid`、`unavailable`、`dropped` | 进程提前退出、PID 复用、无法检查和队列丢弃分别计数 |
+
+需要临时观察时，可在当前账户下执行一次限时采样。采样结束输出 JSON，读取现有范围和清单。
+
+```powershell
+.\scripts\Measure-StartupObservation.ps1 -Seconds 15
+```
 
 ## 启动前保护的范围
 
-IFEO 只按已知 EXE 文件名触发。已经管理的名字在受保护目录内启动时，若文件身份未登记、身份清单缺失或损坏，Provider 在应用 TLS 前退出，退出码 **`0xE0CDF601`**。范围来自监控目录；默认对宽泛的用户 `Packages` 根只保护 `AnthropicPBC.Claude_*` 子目录。DOS 盘符在每次启动时重新解析，避免跨重启保留失效的设备卷名。其他目录的同名程序保持透传。
+IFEO 按已经管理的 EXE 文件名触发。完全新的名字可能在后台收到通知前就执行代码或联网。设备启动和后台任务就绪之间也存在事件监控窗口。启动观测报告的是**身份判定耗时**。实际注册和后台处理从各自的事务与 `health.actions` 核对。
 
-**完全新的文件名在首次出现时没有 IFEO 规则，文件监控和进程事件都无法保证在第一条指令前拦截。** 它可能已执行代码或读取真实环境，然后被监控以 **`0xE0CDF602`** 终止。重启后任务启动前也有进程监控空窗；已持久化的已知名字启动门控仍有效。这一方案不能宣称“任意文件名、任意位置的所有 Anthropic 程序均在第一次执行前登记”。需要该严格保证时必须另行采用系统级进程创建控制。
+已知文件名的启动门控拒绝和后台处理对应各自的诊断。历史日志中的 `0xE0CDF601` 表示启动门控拒绝，`0xE0CDF602` 表示后台已处理未登记进程。运行时适配失败的 `0xE0CDF501` 见[跨版本适配](Stage6-Compatibility.md)。
 
 ## 状态与故障恢复
 
-`Status` 的 `automaticRefresh` 包含 `enabled`、`monitorRunning`、`taskPresent`、`startsAtBoot`、发布验证错误及 `health`。`monitorRunning` 同时检查任务运行状态和三十秒内的心跳。`health` 报告最近刷新成功／失败、进程事件订阅状态以及最近二十次终止处理。`enabled=true` 表示任务已配置，不能代替真实进程 Hook 就绪证据。
+- `enabled=true` 对应任务配置。查看具体 PID 的实际状态还需对照 `running[]` 和 Provider 诊断。
+- `startupObservation` 缺失或过期时，检查后台任务、发布快照和心跳。旧版后台的临时观测只覆盖当次会话。跨开机会话的诊断依赖包含该组件的已部署后台。
+- 刷新失败时保留原有登记并重试。可从 `health` 和离线兼容报告查看签名、文件身份或运行时失败原因。
+- 关闭现有托管部署时，管理器先停止自己的任务并收尾正在进行的刷新事务，再恢复原 IFEO 值。存在来源不一致的值或任务定义时保留恢复材料。保留 `state.json`、`install-pending.json` 和事务备份，以便核对原值和当前配置。
+- 已运行进程继续使用其启动快照。`Status` 可以报告需要退出后再次启动的 PID。进程生命周期由用户控制。
 
-后台刷新失败时保持原有注册并重试；未知运行时仍按现有兼容策略处理，不会降低验签要求。启动门控可能让新版本暂时无法启动，应先检查 `lastError`、防护软件拦截记录及离线兼容报告，登记成功后再由用户启动。
-
-安装中断保留 `install-pending.json`，下次 `Enable`／`Disable` 只回收与记录完全匹配的本工具任务。注册事务由原有 manager 恢复；不要直接删除状态、清空 IFEO 或手动修改任务来绕过冲突。若关闭时 IFEO 有外部冲突，自动监控已停止，恢复材料保留；解决冲突后再次 `Disable`。
-
-## 验证方式
+需要撤销现有部署时，在对应发布版的 64 位管理员 PowerShell 中执行恢复，并重新查询结果。
 
 ```powershell
-.\scripts\Test-ClaudeAuto.ps1
-.\scripts\Test-ClaudeGate.ps1
+.\scripts\Manage-Claude.ps1 -Action Disable
+.\scripts\Manage-Claude.ps1 -Action Status
 ```
 
-前者测试文件事件、隔离进程终止及临时 SYSTEM 任务的创建／停止／删除；后者测试启动门控、TLS 时序、保护范围和精确恢复。测试模拟签名只用于自己的无害测试 EXE，生产入口没有模拟签名参数。涉及注册和任务的测试串行执行。任务定义与实际 SYSTEM 启动可在当前会话验证；没有实际重启机器时不能把它称为重启实测。
+## 启动观测验收
 
-请在正式监控关闭时运行这些集成测试，结束后再按需 `Enable`。后台监控不属于 CTest 的串行调度范围，不能与注册测试并发。
+2026-11-20 使用全机启动事件订阅，启动 100 个不同文件名的微软签名离线夹具。100 次身份判定均在 3 秒内完成，21 项契约检查通过。实测范围为隔离夹具和身份观察。真实 Claude 新版本的启动耗时及首次联网控制需要独立证据。
+
+| 指标 | 实测 |
+| --- | ---: |
+| 创建至判定中位数 | 945.2 毫秒 |
+| 创建至判定 P95 | 1,972.8 毫秒 |
+| 创建至判定 P99 | 1,989.0 毫秒 |
+| 创建至判定最大值 | 2,000.6 毫秒 |
+| 未预验签的额外单样本 | 864.1 毫秒 |
+
+完整记录生成于 `out/audits/startup-observation-global-20261120.json`。可复测文件替换、写入占用、超长路径、清单损坏、退出和 PID 复用等情形：
+
+```powershell
+.\scripts\Test-StartupObservation.ps1 -Samples 100 -AllStartEvents -RequireThreeSeconds
+```
+
+原有任务和注册回归由 `claude_auto_monitor`、`claude_gate_integration` 验收。它们需要专用测试 Windows 环境与串行执行。[构建与验证](build.md#验证)

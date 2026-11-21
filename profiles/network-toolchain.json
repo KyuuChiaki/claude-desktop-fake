@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "go": {
+    "version": "1.27.4",
+    "url": "https://go.dev/dl/go1.27.4.windows-amd64.zip",
+    "sha256": "178ab98950ac69ab25069307dc6ade79f3816e414cce95b4da166a115cde1e7e"
+  },
+  "llvmMingw": {
+    "version": "20261117",
+    "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20261117/llvm-mingw-20261117-ucrt-x86_64.zip",
+    "sha256": "4d002e330a0f703625aa5ccbc37e96f8f824413e163bfc7336774aabd2c3a412"
+  },
+  "xray": {
+    "version": "v26.11.9",
+    "commit": "676eaf66f8f05d4d558ee7a74b4736623d3feeb9",
+    "url": "https://codeload.github.com/XTLS/Xray-core/zip/676eaf66f8f05d4d558ee7a74b4736623d3feeb9",
+    "sha256": "05623c5394d82870edcfdd9355169b05453da133544355012b2cd1874e67f100"
+  }
+}

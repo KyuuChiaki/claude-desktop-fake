@@ -9,6 +9,8 @@
 *.suo
 *.log
 *.dmp
+*.dpapi
+*.netlog.json
 *.pdb
 *.map
 *.dll

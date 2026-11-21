@@ -57,6 +57,11 @@ HINSTANCE WINAPI SinkW(HWND, PCWSTR, PCWSTR file, PCWSTR, PCWSTR, INT) {
     return reinterpret_cast<HINSTANCE>(42);
 }
 
+FARPROC WINAPI PreviousShellLookup(HMODULE module, LPCSTR name) {
+    const auto address = reinterpret_cast<PVOID>(GetProcAddress(module, name));
+    return reinterpret_cast<FARPROC>(cdf::browser_consent::RedirectShellOpenAddress(address));
+}
+
 FARPROC WINAPI ForwardFixtureDelay(unsigned notification, PDelayLoadInfo info) {
     using namespace cdf::browser_consent;
     if (notification != dliNotePreGetProcAddress || !info->dlp.fImportByName ||
@@ -64,8 +69,9 @@ FARPROC WINAPI ForwardFixtureDelay(unsigned notification, PDelayLoadInfo info) {
     ++delay_lookups;
     shell[0].old_address = reinterpret_cast<PVOID>(GetProcAddress(info->hmodCur, shell_open_name));
     shell[1].old_address = reinterpret_cast<PVOID>(GetProcAddress(info->hmodCur, shell_open_ex_name));
-    const auto address = reinterpret_cast<PVOID>(GetProcAddress(info->hmodCur, info->dlp.szProcName));
-    return reinterpret_cast<FARPROC>(RedirectShellOpenAddress(address));
+    FARPROC result = nullptr;
+    ForwardShellLookup(PreviousShellLookup, info->hmodCur, info->dlp.szProcName, result);
+    return result;
 }
 
 void InspectLayout(HWND dialog) {
@@ -210,11 +216,13 @@ void Exercise(bool extended, PCWSTR verb, std::wstring file, const std::wstring&
 }
 
 void ExerciseDelayImports(RegFixture& config, const std::wstring& url) {
-    using cdf::browser_consent::RedirectShellOpenAddress;
+    using cdf::browser_consent::ForwardShellLookup;
     Check(GetModuleHandleW(L"CdfBrowserConsentShellFixture64.dll") == nullptr, "test shell DLL is actually delay-loaded");
-    const auto unrelated = reinterpret_cast<PVOID>(&InspectDialog);
-    Check(RedirectShellOpenAddress(unrelated) == unrelated, "unrelated exports keep their original addresses");
-    Check(RedirectShellOpenAddress(nullptr) == nullptr, "failed lookups stay unresolved");
+    FARPROC result = nullptr;
+    Check(!ForwardShellLookup(PreviousShellLookup, nullptr, "ShellExecuteA", result) && !result,
+          "another export stays on the regular lookup path");
+    Check(!ForwardShellLookup(PreviousShellLookup, nullptr, MAKEINTRESOURCEA(1), result) && !result,
+          "ordinal queries stay on the regular lookup path");
     const std::wstring quoted = L"\""+url+L"\"";
     expected = url;
     config.enable(1);

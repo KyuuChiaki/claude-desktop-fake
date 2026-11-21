@@ -1,14 +1,17 @@
 ﻿[CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('Install', 'Status', 'Uninstall')][string]$Action,
-    [Parameter(Mandatory)][ValidatePattern('(?i)^[^\\/:*?"<>|\x00-\x1f]+\.exe$')][string]$ImageName,
+    [Parameter(Mandatory)][ValidateSet('Install', 'Status', 'Uninstall', 'Configure')][string]$Action,
+    [ValidatePattern('(?i)^[^\\/:*?"<>|\x00-\x1f]+\.exe$')][string]$ImageName,
     [string]$DllPath,
     [string]$ConfigPath,
-    [string]$ImagePath
+    [string]$ImagePath,
+    [string]$ExpectedConfigSha256
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if($Action -eq 'Configure'){$ImageName='cdfguiconfig.exe'}
+elseif(-not $ImageName){throw '-ImageName is required.'}
 $ImageName = $ImageName.ToLowerInvariant()
 $runtimeDirectory = Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2'
 $deployedDll = Join-Path $env:SystemRoot 'System32\CdfTimeZone64.dll'
@@ -413,6 +416,26 @@ try {
         try { $mutexOwned = $mutex.WaitOne(15000) }
         catch [Threading.AbandonedMutexException] { $mutexOwned = $true }
         if (-not $mutexOwned) { throw 'Timed out waiting for another configuration operation.' }
+    }
+    if ($Action -eq 'Configure') {
+        if (-not $DllPath -or -not $ConfigPath -or $ExpectedConfigSha256 -notmatch '^(missing|[0-9a-fA-F]{64})$') {
+            throw 'Configure requires -ConfigPath, -DllPath and -ExpectedConfigSha256.'
+        }
+        Restore-DeploymentTransaction
+        $before = File-Hash $deployedConfig
+        if (-not $before) { $before = 'missing' }
+        if ($before -ine $ExpectedConfigSha256) { throw '配置已被其他操作修改，请刷新后再保存。' }
+        $sourceConfig = (Resolve-Path -LiteralPath $ConfigPath).ProviderPath
+        $validatorBuild = (Resolve-Path -LiteralPath $DllPath).ProviderPath
+        $sourceHash = File-Hash $sourceConfig
+        Assert-Config $sourceConfig $validatorBuild
+        if ((File-Hash $sourceConfig) -cne $sourceHash) { throw '配置在校验期间发生变化。' }
+        $sourceDll = if ([IO.File]::Exists($deployedDll)) { $deployedDll } else { $validatorBuild }
+        Assert-Amd64Dll $sourceDll
+        Ensure-RuntimeDirectory
+        Install-Deployment $sourceDll (File-Hash $sourceDll) $sourceConfig $sourceHash
+        [pscustomobject]@{configSha256=(File-Hash $deployedConfig)} | ConvertTo-Json -Compress
+        return
     }
     $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
         [Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)

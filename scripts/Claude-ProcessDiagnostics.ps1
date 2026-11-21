@@ -20,7 +20,7 @@ public static class CdfClaudeReadMemory {
 }
 '@
 }
-function Get-CdfClaudeProcessDiagnostic([int]$ProcessId,[string]$DllPath,[string]$MapPath){
+function Get-CdfClaudeProcessDiagnostic([int]$ProcessId,[string]$DllPath,[string]$MapPath,[switch]$IdentityOnly){
     $result=[ordered]@{pid=$ProcessId;providerLoaded=$null;identity=$null;time=$null;locale=$null;runtime=$null;inspectionError=$null;method='ReadProcessMemory; no remote execution'}
     $process=$null
     try{
@@ -49,6 +49,7 @@ function Get-CdfClaudeProcessDiagnostic([int]$ProcessId,[string]$DllPath,[string
         $reasons=@('not-checked','matched','manifest-missing','manifest-invalid','process-image-unavailable','image-file-unavailable','image-not-listed','file-identity-mismatch')
         $reason=[BitConverter]::ToUInt32($data,12)
         $result.identity=[pscustomobject]@{version=1;state=[BitConverter]::ToUInt32($data,8);reason=$reasons[[Math]::Min([int]$reason,7)];reasonCode=$reason;errorCode=[BitConverter]::ToUInt32($data,16);imageCount=[BitConverter]::ToUInt32($data,20);nativeStatus=[BitConverter]::ToInt32($data,24);volumeSerial=('{0:x16}' -f [BitConverter]::ToUInt64($data,32));fileId=([BitConverter]::ToString($data,40,16).Replace('-','').ToLowerInvariant());size=[BitConverter]::ToUInt64($data,56);lastWriteTimeUtcTicks=[BitConverter]::ToInt64($data,64);signer=(Text-At $data 72 64);currentImagePath=(Text-At $data 200 520);matchedImagePath=(Text-At $data 1240 520)}
+        if($IdentityOnly){return [pscustomobject]$result}
         $timeCounts=Read-Symbol counters time_provider (23*8)
         $localeCount=@(Get-Content -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) 'include\locale_hooks.inc')|Where-Object {$_ -match '^CDF_LOCALE_HOOK\('}).Count
         $localeCounts=Read-Symbol counters locale_provider ($localeCount*8)

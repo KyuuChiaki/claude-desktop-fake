@@ -14,7 +14,34 @@ function Read-AutoStatus {
     $fresh=$health -and $health.heartbeatUtc -and ([DateTime]::UtcNow-([DateTime]$health.heartbeatUtc).ToUniversalTime()).TotalSeconds -lt 30
     $running=$task -and $task.State -eq 4 -and $fresh -and $health.state -in @('starting','watching','refreshing','retrying')
     if($running){$running=@(Cdf-AutoOwnedProcesses $root $state|Where-Object ProcessId -eq $health.pid).Count -eq 1}
-    [pscustomobject]@{configured=($null -ne $state);enabled=($state -and $state.enabled -and $task -and $task.Enabled -and -not $errorText);monitorRunning=[bool]$running;taskName=$(if($state){$state.taskName}else{$null});taskPresent=($null -ne $task);taskState=$(if($task){$task.State}else{$null});lastTaskResult=$(if($task){$task.LastTaskResult}else{$null});principal='LocalSystem';startsAtBoot=([bool]($task -and $task.Enabled -and -not $errorText));pending=(Test-Path -LiteralPath $pending);error=$errorText;health=$health;root=$root}
+    $observation=$null
+    $observationPath=Join-Path $root 'startup-observation.json'
+    $builtIn=$health -and $health.PSObject.Properties['startupObservationStartedUtc']
+    if(-not $builtIn){$observationPath=Join-Path $root 'startup-observation-session.json'}
+    if($state -and $state.enabled -and $task -and $task.State -eq 4 -and $health -and [IO.File]::Exists($observationPath)){
+        try{
+            $sample=Cdf-AutoReadJson $observationPath
+            if($builtIn){
+                $owned=$sample.ownerPid -eq $health.pid -and ([datetime]$sample.startedUtc).ToUniversalTime() -eq ([datetime]$health.startupObservationStartedUtc).ToUniversalTime()
+            }else{
+                $owned=$sample.watchedMonitor -and $sample.watchedMonitor.pid -eq $health.pid -and $sample.watchedMonitor.release -ceq [IO.Path]::GetFileName($state.release)
+                if($owned){
+                    foreach($item in @(@($sample.ownerPid,$sample.ownerStartedUtc),@($health.pid,$sample.watchedMonitor.startedUtc))){
+                        $p=$null
+                        try{$p=[Diagnostics.Process]::GetProcessById([int]$item[0])
+                            if($p.StartTime.ToUniversalTime() -ne ([datetime]$item[1]).ToUniversalTime()){$owned=$false}}
+                        catch{$owned=$false}finally{if($p){$p.Dispose()}}
+                    }
+                }
+            }
+            if($owned -and $sample.schemaVersion -eq 1){
+                $sample | Add-Member -NotePropertyName stale -NotePropertyValue (([datetime]::UtcNow-([datetime]$sample.updatedUtc).ToUniversalTime()).TotalSeconds -gt 5)
+                $sample | Add-Member -NotePropertyName hosting -NotePropertyValue $(if($builtIn){'monitor'}else{'current-monitor-session'})
+                $observation=$sample
+            }
+        }catch{$observation=[pscustomobject]@{ready=$false;readError=$_.Exception.Message}}
+    }
+    [pscustomobject]@{configured=($null -ne $state);enabled=($state -and $state.enabled -and $task -and $task.Enabled -and -not $errorText);monitorRunning=[bool]$running;taskName=$(if($state){$state.taskName}else{$null});taskPresent=($null -ne $task);taskState=$(if($task){$task.State}else{$null});lastTaskResult=$(if($task){$task.LastTaskResult}else{$null});principal='LocalSystem';startsAtBoot=([bool]($task -and $task.Enabled -and -not $errorText));pending=(Test-Path -LiteralPath $pending);error=$errorText;health=$health;startupObservation=$observation;root=$root}
 }
 if($Action -eq 'Status'){Read-AutoStatus|ConvertTo-Json -Depth 12;return}
 $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -58,6 +85,7 @@ $managedState=Cdf-ReadState $context
 if($managedState -and $managedState.dllSha256 -cne (Cdf-Hash $sourceDll)){throw 'Disable Claude with the previous deployment before upgrading its provider, then run Enable again.'}
 $relative=@(
     'scripts\Claude-AutoCore.ps1','scripts\Watch-Claude.ps1','scripts\Refresh-Claude.ps1',
+    'scripts\Startup-Observation.ps1','scripts\StartupFileEvents.cs',
     'scripts\Claude-FileIdentity.ps1','scripts\Claude-ManagerCore.ps1','scripts\Claude-Enumeration.ps1',
     'scripts\Claude-ProcessDiagnostics.ps1','scripts\Capture-Runtime.ps1','scripts\Runtime-Profiles.ps1','scripts\Toolchain.ps1',
     'config\claude-targets.json','include\locale_hooks.inc','profiles\runtime-adapters.json',
@@ -77,14 +105,15 @@ foreach($file in $files){
     if(Test-Path -LiteralPath $destination){if((Get-Item -LiteralPath $destination -Force).Attributes -band [IO.FileAttributes]::ReparsePoint -or (Cdf-Hash $destination) -cne $file.sha256){throw 'Immutable automatic refresh release changed externally.'}}
     else{Cdf-CopyAtomic (Join-Path $project $file.path) $destination $file.sha256}
 }
-if($old){Cdf-AutoStop $root}
 $shell=Join-Path ([Environment]::GetFolderPath('System')) 'WindowsPowerShell\v1.0\powershell.exe'
 $arguments='-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+(Join-Path $release 'scripts\Watch-Claude.ps1')+'" -StateRoot "'+$root+'"'
 $state=[pscustomobject]@{schemaVersion=1;enabled=$true;ownerSid=$owner;taskName=$taskName;shell=$shell;arguments=$arguments;release=$release;files=$files;packageRoot=$package.root;installedAtUtc=[DateTime]::UtcNow.ToString('o');folderOverrides=[pscustomobject]@{LOCALAPPDATA=[Environment]::GetFolderPath('LocalApplicationData');APPDATA=[Environment]::GetFolderPath('ApplicationData');USERPROFILE=[Environment]::GetFolderPath('UserProfile');PROGRAMFILES=[Environment]::GetFolderPath('ProgramFiles');PROGRAMDATA=[Environment]::GetFolderPath('CommonApplicationData')}}
+$prepared=Cdf-AutoPrepareRefresh $root $state
+if($old){Cdf-AutoStop $root}
 Cdf-Save $pending ([pscustomobject]@{schemaVersion=1;previous=$old;next=$state})
 try{
     Cdf-Save $statePath $state
-    $refresh=Cdf-AutoRefresh $root
+    $refresh=Cdf-AutoRefresh $root $prepared
     $definition=$service.NewTask(0);$definition.RegistrationInfo.Description='Refresh verified Claude images and terminate unregistered valid Anthropic targets.';$definition.RegistrationInfo.Source='ClaudeDesktopFake.AutoRefresh.v1'
     $definition.Principal.UserId='S-1-5-18';$definition.Principal.LogonType=5;$definition.Principal.RunLevel=1
     $definition.Settings.Enabled=$true;$definition.Settings.Hidden=$true;$definition.Settings.StartWhenAvailable=$true

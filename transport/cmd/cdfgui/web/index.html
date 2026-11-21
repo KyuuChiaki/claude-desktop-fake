@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Claude Desktop Fake · 控制台</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/profiles.js" defer></script>
+<script src="/app.js" defer></script>
+<body>
+<a class="skip" href="#main">跳到内容</a>
+<header class="site-header">
+  <div class="layout header-row">
+    <a class="brand" href="#overview" data-page="overview">
+      <img src="/icon.svg" alt="" width="34" height="34">
+      <span>Claude Desktop Fake</span>
+    </a>
+    <span class="local" id="local">正在连接本机</span>
+  </div>
+</header>
+<main id="main" class="layout">
+  <section class="intro">
+    <div>
+      <p class="eyebrow">WINDOWS · 本机管理</p>
+      <h1>桌面控制台<span class="accent">.</span></h1>
+      <p class="intro-note">管理代理、时区和语言，查看 Hook 在各个进程中的状态。</p>
+    </div>
+    <button class="button main-action" id="check" type="button" disabled>检查配置</button>
+  </section>
+  <p class="notice" id="notice" role="status" hidden></p>
+  <div class="card job-result" id="result" aria-live="polite" hidden></div>
+  <nav class="tabs" aria-label="控制台页面">
+    <a href="#overview" class="tab" data-page="overview" aria-current="page">概览</a>
+    <a href="#settings" class="tab" data-page="settings">配置</a>
+    <a href="#connections" class="tab" data-page="connections">连接记录</a>
+  </nav>
+  <section id="overview" class="page" aria-label="概览">
+    <div class="summary">
+      <article class="card meter">
+        <div class="meter-top"><h2>项目登记</h2><button class="switch" id="project-switch" role="switch" aria-label="项目登记" aria-checked="false" disabled><span></span></button></div>
+        <p class="metric" id="project-value">—</p>
+        <p class="detail" id="project-detail">等待读取 IFEO 和自动刷新状态</p>
+        <p class="feedback" id="project-feedback" role="status" hidden></p>
+      </article>
+      <article class="card meter">
+        <div class="meter-top"><h2>网络代理</h2><button class="switch" id="proxy-switch" role="switch" aria-label="网络代理" aria-checked="false" disabled><span></span></button></div>
+        <p class="metric" id="proxy-value" aria-live="polite">—</p>
+        <p class="detail" id="proxy-detail">等待读取代理部署</p>
+        <p class="feedback" id="network-feedback" role="status" hidden></p>
+      </article>
+      <article class="card meter">
+        <div class="meter-top"><h2>环境配置</h2><a class="quiet-link" href="#settings" data-page="settings">编辑 →</a></div>
+        <p class="metric metric-compact" id="env-value">—</p>
+        <p class="detail" id="env-detail">等待读取时区和语言</p>
+      </article>
+    </div>
+    <article class="card section-card">
+      <header class="section-head">
+        <div><h2>运行进程</h2><p id="process-updated">等待首次诊断</p><p id="child-targets" hidden></p></div>
+        <a class="quiet-link" href="#connections" data-page="connections">查看连接 →</a>
+      </header>
+      <p id="process-counts" class="status-line" hidden></p>
+      <div class="table-wrap">
+        <table class="adaptive" aria-label="运行进程和 Hook 状态">
+          <thead><tr><th>进程</th><th>已登记</th><th>Provider</th><th>时间 / 语言</th><th>代理传输</th></tr></thead>
+          <tbody id="processes"><tr><td class="empty" colspan="5">正在读取…</td></tr></tbody>
+        </table>
+      </div>
+      <ul class="notes" id="issues" hidden></ul>
+    </article>
+  </section>
+
+  <section id="settings" class="page" aria-label="配置" hidden>
+    <article class="card section-card">
+      <header class="section-head"><div><h2>时区与语言</h2><p>分别控制时区、区域格式与 UI 语言。保存后在下次进程启动时生效。</p></div><span class="pill" id="schema">—</span></header>
+      <form id="time-form">
+        <div class="fieldset">
+          <label class="toggle-field"><input type="checkbox" id="time-enabled">启用时间 Hook</label>
+          <div class="field-grid">
+            <label class="field">Windows 时区
+              <input id="timezone" list="timezones" placeholder="Pacific Standard Time" required data-lpignore="true">
+              <datalist id="timezones"></datalist>
+            </label>
+            <label class="field">额外 UTC 偏移（秒）
+              <input id="offset" type="number" step="1" required placeholder="0">
+              <span class="hint">0 表示 UTC 无额外偏移。当地偏移由时区与夏令时决定。</span>
+            </label>
+          </div>
+        </div>
+        <div class="fieldset">
+          <label class="toggle-field"><input type="checkbox" id="locale-enabled">启用语言 Hook</label>
+          <p class="hint" id="migration" hidden>启用语言会将 schema 1 升为 schema 2。</p>
+          <div class="field-grid">
+            <label class="field">区域格式
+              <input id="format-locale" list="locales" placeholder="en-US" required>
+            </label>
+            <label class="field">UI 语言
+              <input id="ui-language" list="locales" placeholder="en-US" required>
+            </label>
+            <datalist id="locales"></datalist>
+          </div>
+        </div>
+        <div class="preview" id="time-preview" aria-live="polite" hidden></div>
+        <div class="actions">
+          <button type="button" class="button secondary" id="preview-time" disabled>预览</button>
+          <button type="submit" class="button primary" id="save-time" disabled>保存时区与语言</button>
+        </div>
+        <p class="feedback" id="time-feedback" role="status" hidden></p>
+        <div class="draft-note" id="time-draft" hidden><span></span> <button id="time-reload" class="text-button" type="button">放弃草稿并载入已保存值</button></div>
+      </form>
+    </article>
+    <article class="card section-card">
+      <header class="section-head"><div><h2>代理与网卡</h2><p>VLESS / TCP / REALITY · Vision</p></div><span class="pill" id="proxy-config-state">—</span></header>
+      <form id="proxy-form" autocomplete="off">
+        <div class="fieldset">
+          <div class="field-grid">
+            <label class="field">物理网卡
+              <select id="adapter" required aria-describedby="adapter-note"></select>
+            </label>
+            <label class="field">代理配置
+              <span class="profile-picker">
+                <select id="proxy-profile" required aria-label="代理配置" disabled></select>
+                <span class="profile-caption" aria-hidden="true"><span id="profile-caption">正在读取…</span></span>
+              </span>
+            </label>
+          </div>
+          <p class="hint" id="proxy-summary"></p>
+          <p class="feedback" id="adapter-note" hidden></p>
+          <div class="profile-tools">
+            <button class="text-button" type="button" id="profile-new" disabled>新建配置</button>
+            <button class="text-button" type="button" id="profile-rename" disabled>重命名</button>
+            <button class="text-button" type="button" id="profile-import" disabled>导入 YAML</button>
+            <input type="file" id="profile-file" accept=".yaml,.yml,application/yaml,text/yaml" hidden>
+          </div>
+          <p id="catalog-feedback" class="feedback" role="status" hidden></p>
+        </div>
+      </form>
+      <form class="profile-editor" id="profile-editor" autocomplete="off" hidden>
+        <fieldset id="profile-inputs">
+          <label class="field">配置名称<input id="profile-name" maxlength="160" required></label>
+          <div class="field-grid credential-fields" id="proxy-fields">
+            <label class="field">服务器 IPv4<input id="proxy-server" maxlength="15" placeholder="203.0.113.10" autocomplete="off"></label>
+            <label class="field">端口<input id="proxy-port" type="number" min="1" max="65535" step="1" placeholder="443"></label>
+            <label class="field">VLESS UUID<input id="proxy-uuid" type="password" maxlength="36" autocomplete="new-password"></label>
+            <label class="field">SNI<input id="proxy-sni" maxlength="253" placeholder="example.org"></label>
+            <label class="field">REALITY 公钥<input id="proxy-key" type="password" maxlength="43" autocomplete="new-password"></label>
+            <label class="field">Short ID<input id="proxy-short-id" type="password" maxlength="16" autocomplete="new-password"></label>
+          </div>
+          <div class="actions">
+            <button class="button secondary" type="button" id="profile-cancel">取消</button>
+            <button class="button primary" type="submit" id="profile-store">保存到列表</button>
+          </div>
+        </fieldset>
+      </form>
+        <div class="fieldset">
+          <div class="meter-top">
+            <strong>禁用 WebRTC</strong>
+            <button class="switch" id="webrtc-switch" type="button" role="switch" aria-label="禁用 WebRTC" aria-checked="true" aria-describedby="webrtc-detail" disabled><span></span></button>
+          </div>
+          <p class="hint" id="webrtc-detail">默认启用禁用策略。</p>
+          <p class="feedback" id="webrtc-feedback" role="status" hidden></p>
+          <p class="hint" id="ipv6-policy">网络 Hook 使用 IPv4。</p>
+        </div>
+        <div class="notice inline" id="upgrade-note" hidden>
+          <strong>网络组件有更新</strong>
+          <p>退出使用代理的进程，升级组件后再次打开应用。</p>
+          <button class="button secondary" type="button" id="upgrade" disabled>升级网络组件</button>
+        </div>
+        <p class="feedback" id="upgrade-feedback" role="status" hidden></p>
+        <div class="preview" id="proxy-preview" aria-live="polite" hidden></div>
+        <div class="actions">
+          <button type="button" class="button secondary" id="test-proxy" disabled>测试代理出口</button>
+          <button form="proxy-form" type="submit" class="button primary" id="save-proxy" disabled>应用所选配置</button>
+        </div>
+        <p class="feedback" id="proxy-feedback" role="status" hidden></p>
+        <div class="draft-note" id="proxy-draft" hidden><span></span> <button id="proxy-reload" class="text-button" type="button">放弃草稿并载入已保存值</button></div>
+        <p class="hint button-hint">测试出口会通过所选代理访问一次 ipify。应用代理设置前，请退出仍使用旧配置的进程。</p>
+    </article>
+    <article class="card section-card">
+      <div class="meter-top">
+        <h2>打开默认浏览器前询问</h2>
+        <button id="browser-consent-switch" type="button" class="switch" role="switch" aria-label="打开默认浏览器前询问" aria-checked="false" aria-describedby="browser-consent-note" disabled><span></span></button>
+      </div>
+      <p class="hint">Claude 打开外部网页时，弹窗显示完整 URL。点击「打开」允许本次请求，按 Esc 取消。</p>
+      <p class="hint" id="browser-consent-note">正在读取当前用户的设置…</p>
+      <p class="feedback" id="browser-consent-feedback" role="status" hidden></p>
+    </article>
+  </section>
+
+  <section id="connections" class="page" aria-label="连接记录" hidden>
+    <article class="card section-card">
+      <header class="section-head">
+        <div><h2>代理连接</h2><p id="connection-updated">等待兼容的代理传输进程</p></div>
+        <button class="button secondary" type="button" id="clear" hidden disabled>清除记录</button>
+      </header>
+      <div class="notice inline" id="connection-note" hidden></div>
+      <button class="button small secondary" type="button" id="connection-upgrade" hidden>查看传输升级</button>
+      <div class="list-tools">
+        <div class="segments" aria-label="连接状态">
+          <button id="show-active" type="button" aria-pressed="true">当前连接 <span id="active-count">—</span></button>
+          <button id="show-closed" type="button" aria-pressed="false">已关闭 <span id="closed-count">0</span></button>
+          <button id="show-dns" type="button" aria-pressed="false">DNS <span id="dns-count">—</span></button>
+        </div>
+        <input id="filter" type="search" aria-label="筛选连接" placeholder="筛选域名、IP 或 PID">
+      </div>
+      <p class="status-line" id="connection-counts" hidden></p>
+      <p class="feedback" id="history-feedback" role="status" hidden></p>
+      <div class="table-wrap">
+        <table class="adaptive" aria-label="代理连接">
+          <thead><tr><th id="connection-host-column">域名 / 地址与端口</th><th>进程</th><th id="connection-time-column">开始时间</th><th>耗时</th><th id="connection-result-column">状态 / 原因</th></tr></thead>
+          <tbody id="connection-rows"><tr><td class="empty" colspan="5">正在连接采集服务…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="pagination" hidden>
+        <button id="prev" type="button" class="button small secondary">上一页</button>
+        <span id="page-number"></span>
+        <button id="next" type="button" class="button small secondary">下一页</button>
+      </div>
+      <p class="hint footnote">关闭记录与 DNS 查询各保留最近 2,000 条，随本次控制台会话保存。</p>
+    </article>
+  </section>
+  <footer class="footer">
+    <div><span id="footer-address">本机环回服务</span><span class="subline" id="gui-version"></span></div>
+    <button class="text-button" id="stop" type="button" disabled>停止控制台</button>
+  </footer>
+</main>
+</body>
+</html>

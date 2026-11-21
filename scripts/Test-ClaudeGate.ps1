@@ -163,10 +163,13 @@ try{
         Test-Check ((Cdf-Hash $context.State) -ceq $originalState -and (Test-Registry 'CdfClaudeGateProbe64.exe') -like '*VerifierDlls*') 'conflict preserves all restoration records and other registrations'
     }finally{$key=$ifeo.OpenSubKey('CdfClaudeGateOther64.exe',$true);$key.SetValue('VerifierFlags',[int]::MinValue,[Microsoft.Win32.RegistryValueKind]::DWord);$key.Dispose()}
     $status=Invoke-CdfClaudeManager $context Status;Test-Check (-not $status.stale -and -not $status.issues.Count) 'status validates file IDs and registry'
+    $prepared=Cdf-PrepareEnable $context
     [IO.File]::Move($second,($second+'.previous'));[IO.File]::Copy($probe,$second)
     Test-Probe $second deny 'updated file at same path passes through before refresh' file-identity-mismatch
+    Test-Reject {Invoke-CdfClaudeManager $context Enable $prepared} '*Image changed during verification*' 'commit checks file identity again after preparation'
     $status=Invoke-CdfClaudeManager $context Status;Test-Check $status.stale 'status detects Store-style file replacement'
-    Invoke-CdfClaudeManager $context Enable|Out-Null
+    $refresh=Invoke-CdfClaudeManager $context Enable (Cdf-PrepareEnable $context)
+    Test-Check ($refresh.images -eq 2 -and $refresh.manifestHash -ceq (Cdf-Hash $context.Manifest)) 'prepared refresh confirms the committed manifest'
     Test-Probe $second match 'repeat Enable revalidates and refreshes file identity' matched
     $package.files=@($probe,$fake1,$fake2,$fake3)
     Invoke-CdfClaudeManager $context Enable|Out-Null

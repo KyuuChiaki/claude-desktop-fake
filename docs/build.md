@@ -37,6 +37,16 @@ cmake --build --preset x64-release
 
 本地专用配置可放进已忽略的 `CMakeUserPresets.json`。
 
+## 构建网络组件和控制台
+
+以下命令构建 Go 传输、本机网页控制台和原生组件。脚本根据[工具链档案](../profiles/network-toolchain.json)校验 Go、LLVM-MinGW 和 Xray 源码存档的 SHA-256，并验证 Go 模块校验和。
+
+```powershell
+.\scripts\Build-Network.ps1
+```
+
+工具链默认缓存于当前账户 LocalAppData 下的 `ClaudeDesktopFake\network-tools`。使用 `-CacheDirectory` 可指定已有缓存，使用 `-DownloadProxy` 可向下载工具传入代理。原生部分接受上文的 CMake、Ninja、Visual Studio、`vcvars64` 和 SDK 参数。控制台和 GUI 测试使用 64 位 PowerShell 7.5 或更新版本。
+
 ## 主要产物
 
 都位于 `out/build/x64-release/bin`：
@@ -48,6 +58,11 @@ cmake --build --preset x64-release
 | `CdfBootstrap64.dll` | 纯 Verifier 握手加载探针 |
 | `CdfRuntimeResolve64.exe` | 离线兼容解析器 |
 | `CdfTimeRules64.exe` | 配置校验器和时间规则测试 |
+| `CdfClaudeNetwork64.dll` | 已登记 Claude 映像的网络 Provider |
+| `CdfNetwork64.dll` | 隔离测试进程的网络 Provider |
+| `CdfProxyTransport64.dll` | Go／Xray 传输，由网络构建生成 |
+| `CdfGui64.exe` | 本机网页控制台，由网络构建生成 |
+| `CdfProxyCheck64.exe` | 控制台使用的代理测试程序 |
 | `Cdf*Probe64.exe`、辅助 DLL、`.node` | 隔离测试程序 |
 | 同名 `.map` | 与对应 DLL 匹配的只读进程诊断布局 |
 
@@ -63,4 +78,6 @@ CMake 从当前 VS 安装发现 `dia2.h`；缺失时会提示关闭可选符号�
 - `Generate-WindowsIana.py`：从随库 CLDR 48 数据生成 Windows→IANA 表。
 - `Generate-WinRtAbi.py`：从本机 SDK 的接口声明生成 WinRT 表和转发汇编。自动读取 SDK 环境或注册信息，也接受 `--sdk-root`、`--sdk-version`。通常无需重生成；修改 SDK 后必须审查生成差异和 ABI。
 
-测试分级和管理员集成测试准备见 [testing.md](testing.md)。
+## 验证
+
+执行 `.\scripts\Test.ps1` 运行原生组件的无注册测试。网络和控制台的独立测试、夹具准备及管理员集成测试见[测试指南](testing.md)。

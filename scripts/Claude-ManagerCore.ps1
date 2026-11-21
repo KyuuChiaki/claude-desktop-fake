@@ -30,10 +30,12 @@ public static class CdfManagementMutex {
 }
 function Cdf-NewRegistryMutex { [CdfManagementMutex]::Open() }
 function New-CdfClaudeContext([string]$Root,[string]$SourceDll,[string]$DllName) {
+    $dataRoot=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake'
     [pscustomobject]@{
         Root=$Root; SourceDll=$SourceDll; DllName=$DllName; TargetDll=(Join-Path $env:SystemRoot ('System32\'+$DllName))
         Manifest=(Join-Path $Root 'images.json'); State=(Join-Path $Root 'state.json'); Ownership=(Join-Path $Root 'deployment.json')
         Pending=(Join-Path $Root 'deployment-pending.json'); ImageStates=(Join-Path $Root 'state')
+        NetworkPolicy=$(if($Root -ieq (Join-Path $dataRoot 'stage3\claude')){Join-Path $dataRoot 'network\claude.json'})
         PackageName='AnthropicPBC.Claude'; Family='AnthropicPBC.Claude_fnn82j28hfe8t'; Signer='Anthropic, PBC'
         Discover=$null; Signature=$null; Fault=$null; Base=$null; Ifeo=$null; EnumerationConfigPath=$null
         StartupGuardScopes=$null; BeforeCommit=$null; SkipProcessDiagnostics=$false; FolderOverrides=$null; AdditionalImagePaths=@()
@@ -85,6 +87,17 @@ function Cdf-SetValue($C,[string]$Image,$Value) {
         $k.Flush()
     } finally {if($k){$k.Dispose()}}
 }
+function Cdf-ProviderNames($C,[string]$Name){
+    $expectedRoot=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage3\claude'
+    $policy=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\network\claude.json'
+    if($C.Root -ine $expectedRoot -or -not [IO.File]::Exists($policy)){return $C.DllName}
+    $network=Get-Content -LiteralPath $policy -Raw -Encoding UTF8|ConvertFrom-Json
+    if(-not $network.enabled){return $C.DllName}
+    $dll=Join-Path $env:SystemRoot 'System32\CdfClaudeNetwork64.dll'
+    if($network.schemaVersion -ne 1 -or $network.dllPath -ine $dll -or (Cdf-Hash $dll) -cne $network.dllSha256){throw 'Claude network provider ownership/hash conflict.'}
+    if($Name -iin @($network.excludedImages)){return $C.DllName}
+    return $C.DllName+' CdfClaudeNetwork64.dll'
+}
 function Cdf-ImageSnapshot($C,$Item,[switch]$Partial) {
     $values=@()
     foreach($expected in $Item.installedValues){
@@ -119,7 +132,7 @@ function Cdf-NewImageState($C,[string]$Name) {
     $data=if($kind -eq 'String'){'0x{0:x8}' -f $new}else{[BitConverter]::ToInt32([BitConverter]::GetBytes($new),0)}
     [pscustomobject]@{schemaVersion=1;name=$Name;keyExisted=$exists;originalValues=$original;installedValues=@(
         [pscustomobject]@{name='VerifierFlags';exists=$true;kind='DWord';data=[int]::MinValue},
-        [pscustomobject]@{name='VerifierDlls';exists=$true;kind='String';data=$C.DllName},
+        [pscustomobject]@{name='VerifierDlls';exists=$true;kind='String';data=(Cdf-ProviderNames $C $Name)},
         [pscustomobject]@{name='GlobalFlag';exists=$true;kind=$kind;data=$data})}
 }
 function Cdf-RestoreImage($C,$Item) {
@@ -128,14 +141,15 @@ function Cdf-RestoreImage($C,$Item) {
 }
 function Cdf-ReadState($C) {
     if(-not(Test-Path -LiteralPath $C.State)){return $null}
-    $s=Get-Content -Raw -LiteralPath $C.State|ConvertFrom-Json
+    # Cdf-Save writes UTF-8 without a BOM, including localized error messages.
+    $s=Get-Content -Raw -Encoding UTF8 -LiteralPath $C.State|ConvertFrom-Json
     if($s.schemaVersion -ne 1 -or $s.dllPath -cne $C.TargetDll -or $s.manifestPath -cne $C.Manifest -or $s.phase -notin @('installed','restoring') -or @($s.images).Count -lt 1){throw 'Invalid Claude recovery state.'}
     foreach($i in $s.images){
         if($i.name -notmatch '^[^\\/:*?"<>|\x00-\x1f]+\.exe$' -or @($i.originalValues).Count -notin @(3,4) -or @($i.installedValues).Count -ne @($i.originalValues).Count){throw 'Invalid image recovery entry.'}
         $names=@($i.installedValues.name|Sort-Object -Unique);$allowed=@('GlobalFlag','VerifierDlls','VerifierFlags')
         if($names.Count -eq 4){$allowed+='CdfUnverifiedImageGuard'}
         if((Cdf-Json @($names|Sort-Object)) -cne (Cdf-Json @($allowed|Sort-Object)) -or (Cdf-Json @($i.originalValues.name|Sort-Object)) -cne (Cdf-Json @($allowed|Sort-Object))){throw 'Invalid recovery value names.'}
-        $file=Join-Path $C.ImageStates ($i.name+'.json');if(-not(Test-Path -LiteralPath $file) -or (Cdf-Json (Get-Content -Raw -LiteralPath $file|ConvertFrom-Json)) -cne (Cdf-Json $i)){throw "Image recovery record mismatch: $file"}
+        $file=Join-Path $C.ImageStates ($i.name+'.json');if(-not(Test-Path -LiteralPath $file) -or (Cdf-Json (Get-Content -Raw -Encoding UTF8 -LiteralPath $file|ConvertFrom-Json)) -cne (Cdf-Json $i)){throw "Image recovery record mismatch: $file"}
     }
     return $s
 }
@@ -189,12 +203,12 @@ function Cdf-DiscoverImages($C) {
 function Cdf-AssertDeployment($C,$State) {
     if(Test-Path -LiteralPath $C.TargetDll){
         if(-not(Test-Path -LiteralPath $C.Ownership)){throw "Unowned System32 provider: $($C.TargetDll)"}
-        $d=Get-Content -Raw -LiteralPath $C.Ownership|ConvertFrom-Json
+        $d=Get-Content -Raw -Encoding UTF8 -LiteralPath $C.Ownership|ConvertFrom-Json
         if($d.schemaVersion -ne 1 -or $d.dllPath -cne $C.TargetDll -or $d.dllSha256 -cne (Cdf-Hash $C.TargetDll)){throw 'Provider ownership/hash conflict.'}
     }elseif($State){throw 'Managed Claude provider is missing.'}
     if($State -and ((Cdf-Hash $C.Manifest) -cne $State.manifestSha256 -or (Cdf-Hash $C.TargetDll) -cne $State.dllSha256)){throw 'Managed manifest/provider changed externally.'}
     if($State){
-        $manifest=Get-Content -LiteralPath $C.Manifest -Raw|ConvertFrom-Json
+        $manifest=Get-Content -LiteralPath $C.Manifest -Raw -Encoding UTF8|ConvertFrom-Json
         if($manifest.schemaVersion -eq 3){foreach($image in $manifest.images){
             if($image.runtimeBindingSha256 -ceq ('0'*64)){continue}
             $binding=Join-Path (Join-Path (Split-Path -Parent $C.Manifest) 'bindings') ($image.runtimeBindingSha256+'.bin')
@@ -215,10 +229,18 @@ function Cdf-ValidateConfig($C) {
 # snapshots. Recovery preflights the entire journal before restoring anything.
 function Cdf-Recover($C) {
     if(-not(Test-Path -LiteralPath $C.Pending)){return}
-    $j=Get-Content -Raw -LiteralPath $C.Pending|ConvertFrom-Json
+    $j=Get-Content -Raw -Encoding UTF8 -LiteralPath $C.Pending|ConvertFrom-Json
     if($j.schemaVersion -ne 1 -or $j.transactionId -notmatch '^[a-f0-9]{32}$' -or $j.phase -notin @('prepared','committed','restored')){throw 'Invalid Claude deployment journal.'}
     $dir=Join-Path $C.Root ('recovery.'+$j.transactionId)
     $allowed=@($C.TargetDll,$C.Manifest,$C.State,$C.Ownership)
+    if($C.NetworkPolicy){
+        $allowed+=$C.NetworkPolicy
+        $network=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\network'
+        if($C.NetworkPolicy -ieq (Join-Path $network 'claude.json')){
+            $allowed+=Join-Path $network 'claude-deployment.json'
+            $allowed+=Join-Path $env:SystemRoot 'System32\CdfClaudeNetwork64.dll'
+        }
+    }
     $seen=@{}
     foreach($f in $j.files){
         $target=[IO.Path]::GetFullPath($f.target)
@@ -244,7 +266,12 @@ function Cdf-Recover($C) {
     }elseif($j.phase -eq 'prepared') {
         foreach($change in $j.registry){foreach($old in $change.old){$actual=Cdf-RegistryValue $C $change.name $old.name;$new=@($change.new|Where-Object name -eq $old.name)[0];if(-not(Cdf-ValueEqual $actual $old) -and -not(Cdf-ValueEqual $actual $new)){throw "Recovery conflict for $($change.name)/$($old.name)."}}}
         foreach($f in $j.files){$hash=Cdf-Hash $f.target;if($hash -cne $f.oldHash -and $hash -cne $f.newHash){throw "Recovery file conflict: $($f.target)"};if($f.oldHash -and (Cdf-Hash (Join-Path $dir $f.oldFile)) -cne $f.oldHash){throw 'Recovery backup changed.'}}
-        foreach($change in $j.registry){foreach($old in $change.old){Cdf-SetValue $C $change.name $old};if(-not $change.keyExisted){$k=$C.Ifeo.OpenSubKey($change.name,$false);$empty=$false;try{$empty=$k -and $k.SubKeyCount -eq 0 -and $k.ValueCount -eq 0}finally{if($k){$k.Dispose()}};if($empty){$C.Ifeo.DeleteSubKey($change.name,$false)}}}
+        foreach($change in $j.registry){
+            foreach($old in $change.old){
+                if(-not (Cdf-ValueEqual (Cdf-RegistryValue $C $change.name $old.name) $old)){Cdf-SetValue $C $change.name $old}
+            }
+            if(-not $change.keyExisted){$k=$C.Ifeo.OpenSubKey($change.name,$false);$empty=$false;try{$empty=$k -and $k.SubKeyCount -eq 0 -and $k.ValueCount -eq 0}finally{if($k){$k.Dispose()}};if($empty){$C.Ifeo.DeleteSubKey($change.name,$false)}}
+        }
         foreach($f in $j.files){if((Cdf-Hash $f.target) -cne $f.oldHash){if($f.oldHash){Cdf-CopyAtomic (Join-Path $dir $f.oldFile) $f.target $f.oldHash}else{[IO.File]::Delete($f.target)}}}
         $j.phase='restored';Cdf-Save $C.Pending $j
     }
@@ -267,7 +294,17 @@ function Cdf-Transaction($C,$Registry,$Files) {
     try{
         foreach($f in $j.files){if((Cdf-Hash $f.target) -cne $f.oldHash){throw 'External change before deployment.'};if($f.newHash){Cdf-CopyAtomic (Join-Path $dir $f.newFile) $f.target $f.newHash}else{[IO.File]::Delete($f.target)}}
         $writes=0
-        foreach($change in $j.registry){foreach($v in $change.new){$actual=Cdf-RegistryValue $C $change.name $v.name;$old=@($change.old|Where-Object name -eq $v.name)[0];if(-not(Cdf-ValueEqual $actual $old)){throw 'IFEO changed during transaction.'};Cdf-SetValue $C $change.name $v;++$writes;if($C.Fault){& $C.Fault $writes}}}
+        foreach($change in $j.registry){
+            foreach($v in $change.new){
+                $actual=Cdf-RegistryValue $C $change.name $v.name
+                $old=@($change.old|Where-Object name -eq $v.name)[0]
+                if(-not(Cdf-ValueEqual $actual $old)){throw 'IFEO changed during transaction.'}
+                if(Cdf-ValueEqual $actual $v){continue}
+                Cdf-SetValue $C $change.name $v
+                ++$writes
+                if($C.Fault){& $C.Fault $writes}
+            }
+        }
         $j.phase='committed';Cdf-Save $C.Pending $j;Cdf-Recover $C
     }catch{
         $errorText=$_.Exception.Message
@@ -276,16 +313,51 @@ function Cdf-Transaction($C,$Registry,$Files) {
     }
 }
 function Cdf-FileChange([string]$Target,$Value=$null,[string]$Source=$null){[pscustomobject]@{target=$Target;value=$Value;source=$Source}}
-function Cdf-Enable($C) {
-    if(Test-Path -LiteralPath $C.Pending){throw 'Interrupted Claude transaction exists; run Disable to recover.'}
-    $old=Cdf-ReadState $C;if($old){foreach($i in $old.images){Cdf-AssertImage $C $i}}
-    Cdf-AssertDeployment $C $old;Cdf-ValidateConfig $C
-    if(-not(Test-Path -LiteralPath $C.SourceDll)){throw "Build the Claude provider first: $($C.SourceDll)"}
-    $hash=Cdf-Hash $C.SourceDll
-    if($old -and $old.dllSha256 -cne $hash){throw 'Disable Claude before replacing its provider version.'}
+# The caller holds the same registry mutex as automatic refresh.
+function Cdf-SwitchNetworkSelection($C,$Policy) {
+    if(-not $C.NetworkPolicy){throw 'Network selection has no policy path.'}
+    if([IO.File]::Exists($C.Pending)){
+        $journal=Get-Content -Raw -Encoding UTF8 -LiteralPath $C.Pending|ConvertFrom-Json
+        if($C.NetworkPolicy -notin @($journal.files|ForEach-Object target)){throw 'Interrupted Claude deployment requires recovery.'}
+        Cdf-Recover $C
+    }
+    $state=Cdf-ReadState $C
+    if(-not $state -or $state.phase -ne 'installed'){throw 'Enable Claude before changing its network selection.'}
+    Cdf-AssertDeployment $C $state
+    $combined=$C.DllName+' CdfClaudeNetwork64.dll'
+    $changes=@()
+    $files=@()
+    $state.images=@(foreach($item in $state.images){
+        $snapshot=Cdf-ImageSnapshot $C $item
+        $entry=@($snapshot.values|Where-Object name -eq 'VerifierDlls')[0]
+        if(-not $entry.exists -or $entry.kind -cne 'String' -or $entry.data -cnotin @($C.DllName,$combined)){
+            throw "Unexpected provider selection for $($item.name); recovery records retained."
+        }
+        $desired=if($Policy.enabled -and $item.name -notin $Policy.excludedImages){$combined}else{$C.DllName}
+        if($entry.data -cne $desired){
+            $item=(Cdf-Json $item)|ConvertFrom-Json
+            @($item.installedValues|Where-Object name -eq 'VerifierDlls')[0].data=$desired
+            $changes+=[pscustomobject]@{name=$item.name;keyExisted=$true;old=$snapshot.values;new=$item.installedValues;removeKeyIfEmpty=$false}
+            $files+=Cdf-FileChange (Join-Path $C.ImageStates ($item.name+'.json')) $item
+        }
+        $item
+    })
+    $current=if([IO.File]::Exists($C.NetworkPolicy)){Get-Content -Raw -Encoding UTF8 -LiteralPath $C.NetworkPolicy|ConvertFrom-Json}
+    if(-not $changes.Count -and (Cdf-Json $current) -ceq (Cdf-Json $Policy)){return}
+    if($changes.Count){
+        $state.updatedAtUtc=[DateTime]::UtcNow.ToString('o')
+        $files+=Cdf-FileChange $C.State $state
+    }
+    $files+=Cdf-FileChange $C.NetworkPolicy $Policy
+    Cdf-Transaction $C $changes $files
+}
+function Cdf-PrepareEnable($C) {
+    $configPath=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2\timezone.json'
+    $configHash=Cdf-Hash $configPath
+    Cdf-ValidateConfig $C
     $d=Cdf-DiscoverImages $C
     $manifest=[pscustomobject]@{schemaVersion=1;packageName=$C.PackageName;packageFamily=$C.Family;signer=$C.Signer;images=@($d.images)}
-    $configuration=Get-Content -LiteralPath (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2\timezone.json') -Raw|ConvertFrom-Json
+    $configuration=Get-Content -LiteralPath $configPath -Raw -Encoding UTF8|ConvertFrom-Json
     $bindings=@()
     if($configuration.schemaVersion -eq 3 -and $configuration.runtime.enabled){
         . (Join-Path $PSScriptRoot 'Runtime-Profiles.ps1')
@@ -302,11 +374,39 @@ function Cdf-Enable($C) {
             $image|Add-Member -NotePropertyName runtimeBindingSha256 -NotePropertyValue $bindingHash
         }
     }
+    [pscustomobject]@{discovered=$d;manifest=$manifest;bindings=$bindings;configPath=$configPath;configHash=$configHash}
+}
+function Cdf-Enable($C,$Prepared=$null) {
+    if(Test-Path -LiteralPath $C.Pending){throw 'Interrupted Claude transaction exists; run Disable to recover.'}
+    $old=Cdf-ReadState $C;if($old){foreach($i in $old.images){Cdf-AssertImage $C $i}}
+    Cdf-AssertDeployment $C $old
+    $hash=Cdf-Hash $C.SourceDll
+    if(-not $hash){throw "Build the Claude provider first: $($C.SourceDll)"}
+    if($old -and $old.dllSha256 -cne $hash){throw 'Disable Claude before replacing its provider version.'}
+    $plan=if($Prepared){$Prepared}else{Cdf-PrepareEnable $C}
+    if((Cdf-Hash $plan.configPath) -cne $plan.configHash){throw 'Time configuration changed during verification; refresh again.'}
+    $d=$plan.discovered;$manifest=$plan.manifest;$bindings=$plan.bindings
+    if($Prepared){
+        foreach($image in $manifest.images){
+            $id=Get-CdfImageIdentity $image.path
+            if($id.volumeSerial -cne $image.volumeSerial -or $id.fileId -cne $image.fileId -or
+                $id.size -cne $image.size -or $id.lastWriteTimeUtcTicks -cne $image.lastWriteTimeUtcTicks -or $id.nativePath -cne $image.nativePath){
+                throw "Image changed during verification: $($image.path)"
+            }
+        }
+    }
     $states=@();$changes=@()
     foreach($name in @($d.images.name|ForEach-Object{$_.ToLowerInvariant()}|Sort-Object -Unique)){
         $prior=@(if($old){$old.images|Where-Object name -eq $name})
         $item=if($prior.Count){$prior[0]}else{Cdf-NewImageState $C $name};$guardChanged=$false
         $beforeValues=@($item.installedValues)
+        $desiredProviders=Cdf-ProviderNames $C $name
+        $existingProviders=@($item.installedValues|Where-Object name -eq 'VerifierDlls')[0]
+        if($existingProviders.data -cne $desiredProviders){
+            $item=(Cdf-Json $item)|ConvertFrom-Json
+            @($item.installedValues|Where-Object name -eq 'VerifierDlls')[0].data=$desiredProviders
+            $guardChanged=$true
+        }
         if($null -ne $C.StartupGuardScopes){
             if(@($C.StartupGuardScopes).Count -lt 1 -or @($C.StartupGuardScopes).Count -gt 16){throw 'Startup guard requires 1 to 16 Native directory scopes.'}
             $item=(Cdf-Json $item)|ConvertFrom-Json
@@ -334,7 +434,9 @@ function Cdf-Enable($C) {
     $metadataCurrent=$old -and $old.PSObject.Properties['enumerationDirectories'] -and
         (Cdf-Json @($old.skipped)) -ceq (Cdf-Json @($d.skipped)) -and
         (Cdf-Json @($old.enumerationDirectories)) -ceq (Cdf-Json @($d.enumeration.directories))
-    if($old -and $old.manifestSha256 -ceq $manifestHash -and -not $changes.Count -and $oldEnumerationHash -ceq $d.enumeration.sha256 -and $oldEnumerationPath -ceq $d.enumeration.configurationPath -and $metadataCurrent){return}
+    $summary=[pscustomobject]@{images=@($manifest.images).Count;skipped=@($d.skipped).Count;manifestHash=$manifestHash}
+    if($d.enumeration.configurationPath -and (Cdf-Hash $d.enumeration.configurationPath) -cne $d.enumeration.sha256){throw 'Enumeration configuration changed during verification; Enable refused.'}
+    if($old -and $old.manifestSha256 -ceq $manifestHash -and -not $changes.Count -and $oldEnumerationHash -ceq $d.enumeration.sha256 -and $oldEnumerationPath -ceq $d.enumeration.configurationPath -and $metadataCurrent){return $summary}
     foreach($path in @((Split-Path -Parent $C.Root),$C.Root,$C.ImageStates)){Cdf-SecureDirectory $path}
     $bindingDirectory=Join-Path (Split-Path -Parent $C.Manifest) 'bindings'
     if($bindings.Count){Cdf-SecureDirectory $bindingDirectory}
@@ -348,9 +450,9 @@ function Cdf-Enable($C) {
     if((Cdf-Hash $C.TargetDll) -cne $hash){$files=@((Cdf-FileChange $C.TargetDll -Source $C.SourceDll))+$files}
     foreach($i in $states){$files+=Cdf-FileChange (Join-Path $C.ImageStates ($i.name+'.json')) $i}
     if($old){foreach($i in $old.images){if($i.name -notin $states.name){$files+=Cdf-FileChange (Join-Path $C.ImageStates ($i.name+'.json'))}}}
-    if($d.enumeration.configurationPath -and (Cdf-Hash $d.enumeration.configurationPath) -cne $d.enumeration.sha256){throw 'Enumeration configuration changed during verification; Enable refused.'}
     if($C.BeforeCommit){& $C.BeforeCommit}
     Cdf-Transaction $C $changes $files
+    $summary
 }
 function Cdf-Disable($C) {
     Cdf-Recover $C;$old=Cdf-ReadState $C;if(-not $old){return}
@@ -375,7 +477,7 @@ function Cdf-Status($C) {
         foreach($i in $state.images){try{Cdf-AssertImage $C $i}catch{$issues+=$_.Exception.Message}}
         if((Cdf-Hash $C.TargetDll) -cne $state.dllSha256 -or (Cdf-Hash $C.Manifest) -cne $state.manifestSha256){$issues+='Deployment hash mismatch.'}
         try{Cdf-AssertDeployment $C $state}catch{$issues+=$_.Exception.Message}
-        try{$m=Get-Content -Raw -LiteralPath $C.Manifest|ConvertFrom-Json;$registeredImages=@($m.images);foreach($i in $m.images){$match=$false;try{$match=(Cdf-Json (Get-CdfImageIdentity $i.path)) -ceq (Cdf-Json ($i|Select-Object name,path,nativePath,volumeSerial,fileId,size,lastWriteTimeUtcTicks))}catch{};$images+=[pscustomobject]@{name=$i.name;path=$i.path;signer=$C.Signer;signatureStatus='VerifiedAtEnable';fileIdentityCurrent=$match};if(-not $match){$stale=$true}}}catch{$issues+=$_.Exception.Message}
+        try{$m=Get-Content -Raw -Encoding UTF8 -LiteralPath $C.Manifest|ConvertFrom-Json;$registeredImages=@($m.images);foreach($i in $m.images){$match=$false;try{$match=(Cdf-Json (Get-CdfImageIdentity $i.path)) -ceq (Cdf-Json ($i|Select-Object name,path,nativePath,volumeSerial,fileId,size,lastWriteTimeUtcTicks))}catch{};$images+=[pscustomobject]@{name=$i.name;path=$i.path;signer=$C.Signer;signatureStatus='VerifiedAtEnable';fileIdentityCurrent=$match};if(-not $match){$stale=$true}}}catch{$issues+=$_.Exception.Message}
         $skipped=@($state.skipped)
         try{$package=Cdf-DiscoverPackage $C;if($package.root -ine $state.packageRoot){$stale=$true}}catch{$issues+=$_.Exception.Message;$stale=$true}
     }else{
@@ -395,7 +497,7 @@ function Cdf-Status($C) {
     }
     $runtime=[ordered]@{enabled=$false;configurationVersion=$null;policy=$null;captureEnabled=$false;region=$null;profiles=@();error=$null}
     try{
-        $configuration=Get-Content -LiteralPath (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2\timezone.json') -Raw|ConvertFrom-Json
+        $configuration=Get-Content -LiteralPath (Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2\timezone.json') -Raw -Encoding UTF8|ConvertFrom-Json
         $runtime.configurationVersion=$configuration.schemaVersion
         if($configuration.schemaVersion -eq 3){
             $runtime.enabled=[bool]$configuration.runtime.enabled;$runtime.policy=$configuration.runtime.unknownVersionPolicy;$runtime.captureEnabled=[bool]$configuration.runtime.captureEnabled;$runtime.region=$configuration.region
@@ -408,7 +510,7 @@ function Cdf-Status($C) {
     foreach($image in $images){
         if($state -and (Test-Path -LiteralPath $C.Manifest)){
             try{
-                $installed=Get-Content -LiteralPath $C.Manifest -Raw|ConvertFrom-Json
+                $installed=Get-Content -LiteralPath $C.Manifest -Raw -Encoding UTF8|ConvertFrom-Json
                 if($installed.schemaVersion -eq 3){
                     $entry=@($installed.images|Where-Object path -ceq $image.path)
                     if($entry.Count -eq 1 -and $entry[0].runtimeBindingSha256 -cne ('0'*64)){
@@ -433,7 +535,7 @@ function Cdf-Status($C) {
     }})
     [pscustomobject]@{managed=[bool]$state;enabled=$enabled;images=$images;skipped=$skipped;stale=$stale;issues=$issues;enumeration=[pscustomobject]$enumeration;refreshRequired=([bool]$state -and ($stale -or $enumeration.changed -or @($running|Where-Object requiresEnable).Count -gt 0));running=$running;requiresRestart=(@($running|Where-Object requiresRestart).Count -gt 0);statePath=$C.State;manifestPath=$C.Manifest;pendingTransaction=(Test-Path -LiteralPath $C.Pending);providerPath=$C.TargetDll;providerSha256=(Cdf-Hash $C.TargetDll);configurationPath=(Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage2\timezone.json');registryView='Registry64';runtime=[pscustomobject]$runtime}
 }
-function Invoke-CdfClaudeManager($Context,[ValidateSet('Enable','Status','Disable')][string]$Action) {
+function Invoke-CdfClaudeManager($Context,[ValidateSet('Enable','Status','Disable')][string]$Action,$Prepared=$null) {
     $c=$Context;$mutex=$null;$owned=$false
     try{
         if($Action -ne 'Status'){
@@ -444,7 +546,13 @@ function Invoke-CdfClaudeManager($Context,[ValidateSet('Enable','Status','Disabl
         $c.Base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
         $c.Ifeo=$c.Base.OpenSubKey('SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options',($Action -ne 'Status'))
         if(-not $c.Ifeo){throw '64-bit IFEO registry root is unavailable.'}
-        switch($Action){'Enable'{Cdf-Enable $c};'Disable'{Cdf-Disable $c}}
+        switch($Action){
+            'Enable'{
+                $summary=Cdf-Enable $c $Prepared
+                if($Prepared){return $summary}
+            }
+            'Disable'{Cdf-Disable $c}
+        }
         Cdf-Status $c
     }finally{if($c.Ifeo){$c.Ifeo.Dispose();$c.Ifeo=$null};if($c.Base){$c.Base.Dispose();$c.Base=$null};if($owned){$mutex.ReleaseMutex()};if($mutex){$mutex.Dispose()}}
 }

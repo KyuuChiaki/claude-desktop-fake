@@ -34,6 +34,12 @@ IFEO 仅影响之后启动的进程。Disable 不会卸载已运行进程中的 
 
 升级本项目 DLL 时先用原构建执行 `Disable`，再构建或替换 DLL，最后 `Enable`。有受管理映像时，工具拒绝替换共享 Provider。确认旧进程已退出后再替换被占用的文件。
 
+## 控制台与网络代理
+
+运行 [Build-Network.ps1](../scripts/Build-Network.ps1) 生成网络和控制台产物。在普通终端中运行 `.\scripts\Start-Gui.ps1 -ReadOnly` 查看状态。可写管理需要同一 Windows 账户下的管理员先运行 `.\scripts\Install-GuiManager.ps1`，再使用 `.\scripts\Start-Gui.ps1`。
+
+在「配置」里保存代理时会使用当前账户的 Windows DPAPI。通过「网络代理」开关应用所选配置；网络 Provider 的变更对后续启动的受管进程生效。配置导入、连通性检查和状态字段见[控制台](GUI.md)及[网络代理](Network-Proxy.md)。
+
 ## 打开默认浏览器前询问
 
 此功能默认关闭。部署新版 Provider 后，在使用 Claude 的 Windows 账户下运行以下命令开启确认窗。

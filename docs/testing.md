@@ -14,6 +14,18 @@
 
 `browser_consent` 在独立的 Windows 桌面验证普通和延迟调用、完整 URL、窄屏和低可用高度、置顶、确认后的系统错误以及拒绝后取消。测试使用替身 Shell，不打开浏览器。非交互环境仅验证无法显示确认窗时返回错误的路径。
 
+## 网络、控制台和启动观测
+
+完成[网络构建](build.md#构建网络组件和控制台)后，可运行以下隔离验证。
+
+```powershell
+ctest --test-dir out/build/x64-release -R '^(network_probe(_other)?_baseline|network_build_inspection|network_child_scope|startup_observation)$' --output-on-failure
+.\scripts\Test-Gui.ps1 -ReadOnly
+node .\tests\gui_interactions.cjs
+```
+
+控制台测试启动自己的环回会话。运行前退出现有控制台服务。Go 测试需要网络构建所用的 Go、CGO 编译器、缓存及生成的 Xray 源码，命令为 `go -C transport test -mod=readonly ./...`。实际代理连接测试使用单独夹具，所需参数见[网络代理](Network-Proxy.md)。真实进程、硬件网卡和服务的验证有独立的证据条件。[验收范围](validation.md#网络与控制台)
+
 ## 完整集成测试
 
 仅在受控的 Windows build 19045 x64 测试环境中，用管理员、64 位 PowerShell 执行。涉及共享配置、System32 和 HKLM IFEO；先确保没有其他受管理实例或未完成恢复。测试会启动自己的 Probe 和官方 Electron，并在成功／失败后清理本次注册；外部冲突时保留恢复材料。
@@ -23,7 +35,7 @@
 先准备三个官方夹具，下载校验 SHA-256：
 
 ```powershell
-.\scripts\Build.ps1
+.\scripts\Build-Network.ps1
 .\scripts\Prepare-RuntimeFixture.ps1 -Version 44.9.3
 .\scripts\Prepare-RuntimeFixture.ps1 -Version 44.9.2
 .\scripts\Prepare-RuntimeFixture.ps1 -Version 44.8.0
@@ -47,7 +59,7 @@ try {
 
 构建继续使用 16 线程；注册及共享配置测试通过 `RUN_SERIAL` 串行。六组配置、两种名称的重复启动、各进程上下文及完整文件复核会耗时较长。
 
-## 21 项 CTest
+## 27 项 CTest
 
 | 分组 | 用例 |
 |---|---|
@@ -57,6 +69,8 @@ try {
 | 加载／恢复 | `verifier_load_integration`、`configuration_safety`、`timezone_configuration_safety` |
 | 功能 | `timezone_integration`、`locale_integration`、`claude_gate_integration`、`runtime_integration`、`runtime_cross_version`、`runtime_safety` |
 | 自动监控 | `claude_auto_monitor`：文件事件、进程终止条件及临时 SYSTEM 开机任务生命周期 |
+| 网络 | `network_probe_baseline`、`network_probe_other_baseline`、`network_build_inspection`、`network_recovery`、`network_child_scope` |
+| 启动观测 | `startup_observation` |
 
 `runtime_compatibility_rules` 需要 44.9.3 夹具；`runtime_cross_version` 需要另外两个版本。测试结果输出到 `out/build/x64-release/test-results`，此目录不提交到 Git。
 

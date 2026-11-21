@@ -81,10 +81,8 @@ function Cdf-AutoVerifyRelease($State){
         if((Cdf-Hash $path) -cne $file.sha256){throw "Automatic refresh deployment changed: $($file.path)"}
     }
 }
-function Cdf-AutoRefresh([string]$StateRoot){
-    $statePath=Join-Path $StateRoot 'state.json';$state=Cdf-AutoReadJson $statePath
-    if(-not $state.enabled){throw 'Automatic refresh has been disabled.'}
-    if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -notin @($state.ownerSid,'S-1-5-18')){throw 'Automatic refresh must run as its owner or LocalSystem.'}
+function Cdf-AutoPrepareRefresh([string]$StateRoot,$State){
+    $statePath=Join-Path $StateRoot 'state.json'
     Cdf-AutoVerifyRelease $state
     $context=Cdf-AutoContext $state.release $state;$package=Cdf-DiscoverPackage $context
     $directories=Cdf-AutoDirectories $context $package
@@ -94,9 +92,19 @@ function Cdf-AutoRefresh([string]$StateRoot){
         $current=& $readJsonFunction $statePath
         if(-not $current.enabled -or $current.release -cne $expectedRelease){throw 'Automatic refresh cancelled before commit.'}
     }.GetNewClosure()
-    $result=Invoke-CdfClaudeManager $context Enable
-    if(-not $result.enabled){throw ('Automatic refresh did not produce a valid registration: '+($result.issues -join '; '))}
-    [pscustomobject]@{images=@($result.images).Count;skipped=@($result.skipped).Count;directories=$directories;packageRoot=$package.root;manifestHash=(Cdf-Hash $context.Manifest)}
+    # Discovery and binary verification can take much longer than registry
+    # writes. Only the final preflight and commit need the shared mutex.
+    $prepared=Cdf-PrepareEnable $context
+    [pscustomobject]@{context=$context;prepared=$prepared;release=$state.release;directories=$directories;packageRoot=$package.root}
+}
+function Cdf-AutoRefresh([string]$StateRoot,$Prepared=$null){
+    $state=Cdf-AutoReadJson (Join-Path $StateRoot 'state.json')
+    if(-not $state.enabled){throw 'Automatic refresh has been disabled.'}
+    if([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -notin @($state.ownerSid,'S-1-5-18')){throw 'Automatic refresh must run as its owner or LocalSystem.'}
+    $work=if($Prepared){$Prepared}else{Cdf-AutoPrepareRefresh $StateRoot $state}
+    if($work.release -cne $state.release){throw 'Automatic refresh release changed during preparation.'}
+    $result=Invoke-CdfClaudeManager $work.context Enable $work.prepared
+    [pscustomobject]@{images=$result.images;skipped=$result.skipped;directories=$work.directories;packageRoot=$work.packageRoot;manifestHash=$result.manifestHash}
 }
 function Cdf-AutoCheckProvider([string]$Path){
     # Inspect the PE export table without loading the provider in this process.

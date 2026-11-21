@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'"><title>CDF 网络测试浏览器</title><link rel="stylesheet" href="network_browser.css"></head>
+<body><header>
+<button id="back" title="后退 Alt+←">←</button><button id="forward" title="前进 Alt+→">→</button><button id="reload" title="刷新 Ctrl+R">↻</button>
+<form id="navigate"><input id="address" type="text" spellcheck="false" autocomplete="off" aria-label="网址"><button type="submit">打开</button></form>
+<button data-url="https://cleanip.io/who-am-i">CleanIP</button><button data-url="https://browserleaks.com/webrtc">WebRTC</button><button data-url="https://api.ipify.org?format=json">出口 IP</button>
+</header><div id="status"><strong id="mode">正在确认网络 Hook…</strong><span id="message"></span><span class="hint">Ctrl+L 输入网址 · 关闭窗口后自动撤销本次注册</span></div><script src="network_browser_toolbar.js"></script></body></html>

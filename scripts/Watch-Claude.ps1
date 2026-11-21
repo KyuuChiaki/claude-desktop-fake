@@ -4,6 +4,7 @@ $ErrorActionPreference='Stop';Set-StrictMode -Version Latest
 $statePath=Join-Path $StateRoot 'state.json';$healthPath=Join-Path $StateRoot 'health.json'
 $singleton=[Threading.Mutex]::new($false,'Global\ClaudeDesktopFake.AutoRefresh.Worker');$owned=$false;$hub=$null;$refresh=$null
 $eventId='CdfProcessStart-'+$PID;$subscription=$null;$health=$null
+$startupObservation=$null
 try{
     . (Join-Path $PSScriptRoot 'Claude-AutoCore.ps1')
     try{$owned=$singleton.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owned=$true}
@@ -16,6 +17,11 @@ try{
     $queue=[Collections.Generic.HashSet[int]]::new();$resultPath=Join-Path $StateRoot 'refresh-result.json'
     $manifest=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ClaudeDesktopFake\stage3\claude\images.json'
     $health=[ordered]@{schemaVersion=1;pid=$PID;state='starting';lastAttemptUtc=$null;lastSuccessUtc=$null;lastError=$null;images=0;events=0;heartbeatUtc=$null;actions=@();processTrace=$false;executionWindow='post-start monitoring; unknown image names are not intercepted before first instruction'}
+    try{
+        . (Join-Path $PSScriptRoot 'Startup-Observation.ps1')
+        $startupObservation=Start-CdfStartupObservation -Directories $directories -Manifest $manifest -StatusPath (Join-Path $StateRoot 'startup-observation.json')
+        $health.startupObservationStartedUtc=$startupObservation.shared.startedUtc
+    }catch{$health.startupObservationError=$_.Exception.Message}
     try{$subscription=Register-CimIndicationEvent -Namespace root/cimv2 -Query 'SELECT * FROM Win32_ProcessStartTrace' -SourceIdentifier $eventId;$health.processTrace=$true}catch{$health.lastError=$_.Exception.Message}
     while($true){
         $state=Cdf-AutoReadJson $statePath;if(-not $state.enabled){break}
@@ -48,6 +54,7 @@ try{
                     $health.lastSuccessUtc=$result.finishedAtUtc;$health.lastError=$null;$health.images=$result.result.images
                     $changed=$lastHash -cne $result.result.manifestHash;$lastHash=$result.result.manifestHash
                     $previous=$hub;$hub=Cdf-AutoWatchers $result.result.directories;$previous.Dispose();$generation=$hub.Generation
+                    if($startupObservation){$startupObservation.shared.directories=@($result.result.directories)}
                     if($changed){$dirty=$true;$dirtySince=$now}
                     $nextFull=$now.AddSeconds(300)
                 }else{$health.lastError=$result.error;$nextFull=$now.AddSeconds(10)}
@@ -77,6 +84,7 @@ try{
     }catch{}
     throw
 }finally{
+    if($startupObservation){Stop-CdfStartupObservation $startupObservation}
     if($subscription){Unregister-Event -SourceIdentifier $eventId -ErrorAction SilentlyContinue}
     if($hub){$hub.Dispose()};if($refresh){$refresh.Dispose()};if($owned){$singleton.ReleaseMutex()};$singleton.Dispose()
 }

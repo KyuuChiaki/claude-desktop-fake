@@ -1,110 +1,99 @@
+<div align="center">
+
 # Claude Desktop Fake
 
-Windows x64 的进程内时间、时区、区域格式和语言虚拟化实验项目。当前版本 **0.6.0**。
+**Windows x64 进程内时间、区域语言与网络行为实验**
 
-通过 IFEO + Windows Application Verifier，在测试程序或通过签名与文件身份门控的 Microsoft Store 版 Claude 进入 TLS／业务代码前加载 Provider。配置由 JSON 提供，运行时读取启动快照。项目不会修改系统全局时间、时区或磁盘上的 Claude 包／ASAR。
+C++17 · PowerShell · Go · MIT
 
-本项目独立于 Anthropic、Microsoft 和 Electron。语言标识与格式化结果不等于应用资源文本翻译，地理区域也不等于 IP 地理位置。
+[快速开始](#快速开始) · [配置](#配置) · [查看状态](#查看状态) · [项目结构](#项目结构) · [文档](docs/README.md)
 
-## 支持范围
+</div>
 
-- Windows **build 19045、AMD64**；其他 Windows 上能编译不代表运行时已验收。
-- Windows Native／Win32、验收覆盖的 UCRT、WinRT 默认语言与格式化、独立 Geo。
-- 已验证 ABI 的 Node／V8／ICU／Electron 默认 Intl、navigator 和 Chromium 默认网络语言。
-- Electron 44.9.3、44.9.2 完整矩阵通过；44.8.0 核心通过，可选采样不完整。
-- 真实 Claude 的包注册与隔离 Electron 的行为证据分开，真实进程／SYSTEM 服务仍需用户控制启动后采集。
+---
 
-未知 ABI、直接 syscall／共享页、自定义时间源、未覆盖的私有接口和其他 Windows 版本不作兼容保证。完整边界见 [兼容性](docs/compatibility.md)。
+## 这是什么
+
+Claude Desktop Fake 用于在 Windows 上研究单个进程读取时间、时区、区域格式、UI 语言和网络设置时的行为。仓库提供 Application Verifier Provider、隔离测试程序、离线兼容分析工具和本机网页控制台。时间和区域设置只在支持的进程接口中生效，Windows 的全局时钟和区域设置保留原值。
+
+| 功能 | 可查看或验证的行为 |
+| --- | --- |
+| 时间与时区 | 虚拟 UTC、Windows 年度时区规则、夏令时和进程内当前时间 |
+| 区域格式、UI 语言与地理区域 | 分别配置日期和数字格式、首选语言及默认国家或地区 |
+| Electron、V8、ICU 与 WinRT | 通过离线分析确认运行时兼容性并检查各功能的就绪状态 |
+| 网络代理预览 | 查看受测代理连接、目标域名和端口、DNS 记录及 WebRTC 策略状态 |
+| 更新与启动诊断 | 查看签名和文件身份判定、已登记映像、最近的后台刷新及启动观测耗时 |
 
 ## 快速开始
 
-需要 64 位 PowerShell 7、Visual Studio 2022/Build Tools 的 C++ 工作负载、Windows SDK 10.0.26100.0、CMake 3.24+、Python 3.10+。默认 Ninja + MSVC，x64 Release，16 线程。工具路径自动发现，也可显式指定；详见 [构建](docs/build.md)。
+从仓库根目录运行命令。需要 Windows x64、Visual Studio 的 x64 MSVC 和 MASM、Windows SDK `10.0.26100.0`、CMake 3.24+、Ninja、Python 3.10+ 及 64 位 PowerShell。带运行时扩展的历史行为验收使用 Windows 10 build 19045。网页控制台要求 PowerShell 7.5 或更新版本。
 
-在仓库根目录执行，无需管理员：
+构建原生组件后，可以预览一个固定时刻。
 
 ```powershell
 .\scripts\Build.ps1
-.\scripts\Test.ps1
+.\scripts\Show-TimeConfig.ps1 -ReferenceUtc '2026-01-15T20:00:00Z'
 ```
 
-随后在**安装了 Claude Store 包的同一用户会话**中打开管理员、64 位 PowerShell，仍从仓库根目录执行：
+默认模板会得到洛杉矶当地时间 12:00。输出中的 `utcClockShiftSeconds` 为 `0`，`timeZoneOffsetSeconds` 为 `-28800`。预览只读取配置和本机规则。完整构建、已有缓存和网络组件的构建方式见[构建指南](docs/build.md)。
+
+构建 Go 传输和控制台后，可以从工作树打开只读页面。默认监听本机环回端口 `17862`，占用时自动选择可用端口。[控制台使用说明](docs/GUI.md)
 
 ```powershell
-.\scripts\Initialize-Config.ps1
-.\scripts\Manage-Claude.ps1 -Action Enable
+.\scripts\Build-Network.ps1
+.\scripts\Start-Gui.ps1 -ReadOnly
+```
+
+首次登记、可写控制台以及升级和撤销的步骤见[使用与启停](docs/usage.md)。
+
+## 配置
+
+| 文件 | 用途 |
+| --- | --- |
+| [`config/timezone.json`](config/timezone.json) | schema 3 配置模板，包含时间、区域语言、地理区域和运行时四组 |
+| [`config/timezone-v3.schema.json`](config/timezone-v3.schema.json) | 编辑器校验参考，运行时以 Windows 时区、NLS 和项目校验器为准 |
+| [`config/claude-targets.json`](config/claude-targets.json) | Store 包及附加目录的发现范围 |
+| [`config/claude-network-children.json`](config/claude-network-children.json) | 控制台观察的外部子程序名称，默认包含 `ssh.exe` 和 `node.exe` |
+
+**洛杉矶当地时间使用 `timeZoneId: "Pacific Standard Time"` 和 `utcOffsetSeconds: 0`。** 后者只调整 UTC 时钟。时区规则根据日期单独计算 UTC−7 或 UTC−8。每个新进程读取一次部署配置，已运行进程继续使用自己的启动快照。`captureEnabled` 控制运行时诊断样本，默认关闭。完整字段说明、旧版配置和预览示例见[时间与区域配置](docs/time-configuration.md)。
+
+## 查看状态
+
+```powershell
 .\scripts\Manage-Claude.ps1 -Action Status
+.\scripts\Manage-ClaudeAuto.ps1 -Action Status
 ```
 
-初始化工具创建经过校验的首次配置，拒绝覆盖已有不同内容。`Enable` 同时安装并立即启动 SYSTEM 文件／进程监控，创建开机及当前用户登录触发的计划任务。随后由用户退出并重新启动 Claude；服务的重启也由用户安排。监控发现有效 Anthropic 签名且未登记的运行进程时会终止该进程，再刷新登记；不会自动重新启动应用。
+从 `running[]` 检查具体 PID 的文件身份、Provider 和功能状态。配置已保存、映像已登记、DLL 已加载和功能已就绪对应不同证据。启动观测的 `creationToVerdictMs` 从 Windows 记录的进程创建时刻计到身份判定完成。完全新的 EXE 名称仍存在启动后的发现窗口。[状态字段与诊断](docs/automatic-refresh.md)
 
-关闭：
+运行时兼容性取决于映像、ABI、规则和 Windows 构建。网络结果限于受测进程、采样窗口和接口范围，真实应用、共享子程序和系统服务需要各自的运行证据。[跨版本适配](docs/Stage6-Compatibility.md) · [验收范围](docs/validation.md)
 
-```powershell
-.\scripts\Manage-Claude.ps1 -Action Disable
-```
-
-`Disable` 先取消后台刷新、停止监控并自动删除本工具的开机任务，再恢复 IFEO。它不卸载已运行进程中的 DLL；进程退出后恢复基线。保留部署和恢复材料的规则见 [使用与恢复](docs/usage.md)。
-
-## 默认配置
-
-[config/timezone.json](config/timezone.json) 为 schema 3 模板：
-
-```json
-{
-  "schemaVersion": 3,
-  "time": {"enabled": true, "timeZoneId": "Pacific Standard Time", "utcOffsetSeconds": 0},
-  "locale": {"enabled": true, "formatLocale": "en-US", "uiLanguage": "en-US"},
-  "region": {"enabled": true, "homeRegion": "US"},
-  "runtime": {"enabled": true, "unknownVersionPolicy": "block", "captureEnabled": false}
-}
-```
+## 项目结构
 
 ```text
-虚拟 UTC = 真实 UTC + utcOffsetSeconds
-虚拟本地时间 = 按配置时区及对应日期的 DST 规则换算虚拟 UTC
+config/           环境配置、目标范围和子进程观察清单
+profiles/         运行时适配档案与网络工具链锁定信息
+include/          配置、Provider 与诊断结构定义
+src/              Windows x64 Provider 和离线分析工具
+scripts/          构建、配置、状态查询和验收脚本
+transport/        Go 网络传输、连接记录和本机控制台
+tests/            自有测试程序与隔离运行时夹具
+docs/             使用指南、技术说明和阶段验收
+third_party/      第三方源码、数据及许可证
 ```
-
-`utcOffsetSeconds` 是**额外的 UTC 时钟偏移**，不是时区偏移。只想显示洛杉矶当前时间时，保持 `Pacific Standard Time` 和 `0`；程序自动按日期采用 UTC−7／UTC−8。不要把 `-25200` 或 `-28800` 再填进该字段，也不要删除这个必填字段。
-
-构建后可只读预览，不需要管理员，也不安装 Provider：
-
-```powershell
-.\scripts\Show-TimeConfig.ps1 -ConfigPath '.\config\timezone.json'
-```
-
-输出将 `utcClockShiftSeconds` 与 `timeZoneOffsetSeconds` 分开，并显示虚拟 UTC、本地时间和夏令时状态。`captureEnabled` 只控制可选 JS 诊断采样，关闭采样仍能启用 Hook；具体见 [配置说明](docs/configuration.md)。
-
-格式区域与 UI 语言分离；国家地区独立。显式 Locale、时区、线程／进程语言、会话及请求头优先。QPC、TickCount、hrtime、运行时长和 CPU 耗时保持真实。schema 1／2 保留旧行为，不自动开启新功能。字段、编辑与校验说明见 [配置](docs/configuration.md)。
-
-## 更新后的兼容处理
-
-`Enable` 后，文件监控对新建、替换和版本目录变动进行去抖刷新，并每五分钟完整复核。每次登记仍重新检查有效 Authenticode 签名、`Anthropic, PBC` 签名者和具体文件身份，再进行离线兼容解析。也可手动重新执行 `Enable`。
-
-EXE 枚举目录由 [config/claude-targets.json](config/claude-targets.json) 配置，默认包含动态发现的 Store 包、当前用户的 `%LOCALAPPDATA%\Claude-3p`、`%LOCALAPPDATA%\Packages` 和 `%ProgramFiles%\WindowsApps\AnthropicPBC.Claude_*`，覆盖 Desktop 下载的 Claude Code、Store 重定向缓存及并存的 Claude 安装版本。WindowsApps 只进入名称匹配的目录，目录模式不固定架构或发布者 ID 后缀。目录变量无需写入用户名或系统盘盘符。每个文件仍须独立验签和登记；修改仓库目录配置后重新 `Enable`，以更新管理员保护的监控快照。下载到受监控目录的新版本会自动刷新；详见 [枚举目录](docs/targets.md)。
-
-完整映像命中、同运行时重打包或已验证 ABI 自动解析均会生成绑定。定位不唯一、ABI 改变或证据不足时拒绝适配。默认 block 会在启用前拒绝不支持的目标；启动复核失败按配置阻止或整套透传。对于已经管理的文件名，受保护目录内尚未登记的新版本在应用 TLS 前被阻止；范围外同名程序保持透传。全新文件名的进程只能在启动后检测并终止，文件监控不提供首条指令前的全局拦截保证。详见 [自动刷新与开机监控](docs/automatic-refresh.md)。
-
-Provider 自身升级先 `Disable`，再替换构建并 `Enable`。不强行覆盖调试器、其他 Verifier、过滤配置或外部修改。
 
 ## 文档
 
-| 文档 | 内容 |
-|---|---|
-| [构建](docs/build.md) | 环境、自动发现、工具覆盖、产物和生成器 |
-| [使用](docs/usage.md) | 首次部署、启停、更新、浏览器外链确认、通用 Probe、诊断和恢复 |
-| [配置](docs/configuration.md) | 时间、区域、语言、地理区域与失败策略 |
-| [枚举目录](docs/targets.md) | JSON 目录列表、用户变量、Code 缓存、身份刷新与状态 |
-| [开机监控](docs/automatic-refresh.md) | Enable／Disable 绑定、自动验签、启动门控、进程处理与故障恢复 |
-| [兼容性](docs/compatibility.md) | 分级识别、离线分析、绑定和支持边界 |
-| [测试](docs/testing.md) | 无注册检查、完整套件、监控测试和夹具准备 |
-| [故障排查](docs/troubleshooting.md) | 错误分类、冲突与中断恢复 |
-| [架构](docs/architecture.md) | 源码导航、加载链与诊断 ABI |
-| [验收摘要](docs/validation.md) | 参考环境事实与实际进程证据边界 |
+| 想了解 | 入口 |
+| --- | --- |
+| 构建、配置校验和测试结果 | [构建与验证](docs/build.md) · [测试](docs/testing.md) · [文档索引](docs/README.md) |
+| 时区、UTC 偏移和语言选择 | [时间与区域配置](docs/time-configuration.md) · [区域格式与 UI 语言](docs/Stage3-Locale.md) |
+| 控制台、默认浏览器打开确认、代理与连接记录 | [网页控制台](docs/GUI.md) · [外链确认](docs/GUI.md#打开默认浏览器前询问) · [网络代理](docs/Network-Proxy.md) |
+| Store 目录、后台刷新和新 EXE 观测 | [目标目录](docs/targets.md) · [自动刷新与启动诊断](docs/automatic-refresh.md) |
+| 运行时兼容性及可选采样 | [运行时与 WinRT](docs/Stage5-Runtime.md) · [离线兼容分析](docs/Stage6-Compatibility.md) |
 
-构建缓存、下载夹具、日志、map、PDB、身份清单和本机恢复记录不作为仓库内容提交。第三方运行时 EXE 和 Windows SDK 不随仓库分发。
+文档结构参考 [Vectored Overloading 的 README](https://github.com/KyuuChiaki/Vectored-Overloading/blob/master/README.zh-CN.md)。
 
-## 许可证与参与
+## 许可证
 
-原创代码与文档使用 [MIT License](LICENSE)。第三方材料适用各自许可证，见 [第三方通知](THIRD_PARTY_NOTICES.md)。
-
-提交修改前阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+仓库自有代码采用 [MIT](LICENSE)。传输依赖及其许可证见[第三方声明](transport/THIRD_PARTY_NOTICES.md)和[许可证目录](third_party/network-licenses/)。

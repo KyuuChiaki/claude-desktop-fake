@@ -7,6 +7,7 @@ The root [MIT license](LICENSE) covers this project's original code and document
 | jsmn 1.1.0 | [zserge/jsmn](https://github.com/zserge/jsmn), MIT | [license](third_party/jsmn/LICENSE), [pinned source and hash](third_party/jsmn/SOURCE.md) |
 | CLDR 48 Windows-to-IANA mapping | [Unicode CLDR](https://github.com/unicode-org/cldr/tree/release-48), Unicode License v3 | [license](third_party/cldr/LICENSE), [source and hash](third_party/cldr/README.md) |
 | Runtime adapter reference material | Official Electron 44.9.3 x64 release; Electron and bundled Chromium/V8/Node/ICU/LLVM components have their own notices | [Electron license](third_party/runtime-notices/LICENSE), [original bundled notices](third_party/runtime-notices/LICENSES.chromium.html) |
+| Go transport and GUI dependencies | Xray-core (MPL-2.0), Go and the modules pinned in the transport | [transport notices](transport/THIRD_PARTY_NOTICES.md), [dependency licenses](third_party/network-licenses/) |
 
 `profiles/runtime-adapters.json` contains expected instruction data used to identify supported runtime functions. The reference runtime's bundled notices are retained without modification. Electron, Claude, Windows SDK binaries and PDBs are not shipped in the repository; the fixture preparation script downloads official Electron archives separately and verifies their published SHA-256 values.
 
