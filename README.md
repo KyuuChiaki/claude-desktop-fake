@@ -14,7 +14,7 @@ C++17 · PowerShell · Go · MIT
 
 ## 这是什么
 
-Claude Desktop Fake 用于在 Windows 上研究单个进程读取时间、时区、区域格式、UI 语言和网络设置时的行为。仓库提供 Application Verifier Provider、隔离测试程序、离线兼容分析工具和本机网页控制台。时间和区域设置只在支持的进程接口中生效，Windows 的全局时钟和区域设置保留原值。
+Claude Desktop Fake 用于在 Windows 上修改Claude Desktop读取时间、时区、区域格式、UI 语言和网络设置时的行为。仓库提供 Application Verifier Provider、隔离测试程序、离线兼容分析工具和本机网页控制台。时间和区域设置只在支持的进程接口中生效，Windows 的全局时钟和区域设置保留原值。
 
 | 功能 | 可查看或验证的行为 |
 | --- | --- |
